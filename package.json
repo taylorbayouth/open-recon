@@ -5,9 +5,11 @@
   "main": "index.js",
   "types": "index.d.ts",
   "bin": {
-    "open-recon": "./cli.js"
+    "open-recon": "./agent.js",
+    "open-recon-extract": "./cli.js"
   },
   "scripts": {
+    "start": "node agent.js",
     "launch": "node launch.js",
     "extract": "node cli.js --tree --pretty",
     "agent": "node agent.js",
