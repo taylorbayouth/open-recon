@@ -1,0 +1,343 @@
+'use strict';
+
+// Agent-half tests: reduce, validate, execute (cdp backend), and the full loop
+// driven by a fake provider + fake session. No Chrome and no network — none of
+// these modules pull in chrome-remote-interface, so this file runs anywhere
+// (unlike test.js, whose integration half needs a live browser).
+
+const assert = require('assert');
+
+const { reduce, computeBriefHash } = require('../lib/reduce');
+const { validate } = require('../lib/validate');
+const registry = require('../lib/actions');
+const { createExecutor } = require('../lib/execute');
+const planMod = require('../lib/plan');
+const { run } = require('../lib/loop');
+
+// ─── tiny sequential runner ──────────────────────────────────────────────────
+// Sequential matters: the loop tests share the injected fake provider, so they
+// must not run concurrently.
+
+let passed = 0, failed = 0;
+async function test(name, fn) {
+  try { await fn(); console.log('  ✓', name); passed++; }
+  catch (err) { console.error('  ✗', name); console.error('   ', err.stack || err.message); failed++; }
+}
+
+// ─── fixtures ────────────────────────────────────────────────────────────────
+
+// A fresh brief each call so refs stay valid every turn. bbox uses the array
+// form to also exercise bboxArr→obj normalization.
+function makeBrief(overrides = {}) {
+  return {
+    schemaVersion: '2.0',
+    url: 'http://example.test/',
+    title: 'Example',
+    timestamp: '2026-01-01T00:00:00Z',
+    viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 0 },
+    elements: [{ ref: '@e1', role: 'textbox', name: 'Search', bbox: [100, 200, 300, 40] }],
+    text: [{ ref: '@t1', role: 'heading', name: 'Welcome', bbox: [100, 50, 300, 30] }],
+    lookup: { '@e1': 111, '@t1': 222 },
+    stats: {},
+    ...overrides,
+  };
+}
+
+// Fake CDP session: records every client call so tests can assert dispatch.
+function makeFakeSession(briefQueue) {
+  const calls = [];
+  const settleArgs = [];
+  let extractCount = 0;
+  const client = {
+    Input: {
+      dispatchMouseEvent: async (p) => { calls.push(['mouse', p]); },
+      dispatchKeyEvent:   async (p) => { calls.push(['key', p]); },
+      insertText:         async (p) => { calls.push(['insertText', p]); },
+    },
+    DOM: {
+      enable: async () => {},
+      getDocument: async () => {},
+      pushNodesByBackendIdsToFrontend: async ({ backendNodeIds }) => ({ nodeIds: backendNodeIds.map(() => 9001) }),
+      focus: async (p) => { calls.push(['focus', p]); },
+    },
+  };
+  return {
+    client,
+    calls,
+    settleArgs,
+    get extractCount() { return extractCount; },
+    async extract() {
+      const b = briefQueue[Math.min(extractCount, briefQueue.length - 1)];
+      extractCount++;
+      return typeof b === 'function' ? b() : b;   // function ⇒ fresh brief per call
+    },
+    async settle(opts) { settleArgs.push(opts); return 0; },
+    async close() {},
+  };
+}
+
+function installFakeProvider(turns) {
+  let i = 0;
+  planMod.providers.fake = {
+    name: 'fake',
+    defaultModel: 'fake-1',
+    async plan() {
+      const actions = turns[Math.min(i, turns.length - 1)];
+      i++;
+      return {
+        kind: 'completion', version: '1.0', provider: 'fake', model: 'fake-1',
+        raw: {}, actions, usage: {}, elapsedMs: 0,
+      };
+    },
+  };
+}
+
+let tuSeq = 0;
+function action(verb, extra = {}) {
+  return { kind: 'action', verb, args: {}, toolUseId: `tu_${verb}_${++tuSeq}`, ...extra };
+}
+
+const baseConfig = (overrides = {}) => ({
+  provider: 'fake',
+  model: null,
+  loop: { maxSteps: 10, shortCircuitOnNoChange: false, pollMs: 0, maxNoChangePolls: 1, ...(overrides.loop || {}) },
+  settle: { afterActionMs: 0, maxMs: 0 },
+  view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
+  executor: { backend: 'cdp' },
+});
+
+// ─── suites ──────────────────────────────────────────────────────────────────
+
+async function reduceSuite() {
+  console.log('\nreduce:');
+
+  await test('interleaves @e and @t in reading order with coords', () => {
+    const v = reduce(makeBrief(), { includeText: true, includeCoords: true });
+    const lines = v.listing.split('\n');
+    assert.ok(lines[0].includes('@t1'), 'heading (y=50) sorts first');
+    assert.ok(lines[1].includes('@e1'), 'textbox (y=200) sorts second');
+    assert.match(lines[1], /\(250,220\)/, 'appends rounded (x,y) center');
+  });
+
+  await test('includeText:false drops @t lines', () => {
+    const v = reduce(makeBrief(), { includeText: false });
+    assert.ok(!v.listing.includes('@t1'));
+    assert.ok(v.listing.includes('@e1'));
+  });
+
+  await test('includeCoords:false omits coordinates', () => {
+    const v = reduce(makeBrief(), { includeCoords: false });
+    assert.ok(!/\(\d+,\d+\)/.test(v.listing), 'no coords expected');
+  });
+
+  await test('dedupeText collapses consecutive identical text', () => {
+    const brief = makeBrief({
+      elements: [],
+      text: [
+        { ref: '@t1', role: 'paragraph', name: 'Same', bbox: [0, 10, 50, 10] },
+        { ref: '@t2', role: 'paragraph', name: 'Same', bbox: [0, 20, 50, 10] },
+        { ref: '@t3', role: 'paragraph', name: 'Other', bbox: [0, 30, 50, 10] },
+      ],
+      lookup: {},
+    });
+    const v = reduce(brief, { dedupeText: true });
+    assert.strictEqual((v.listing.match(/Same/g) || []).length, 1, 'adjacent identical collapses');
+    assert.ok(v.listing.includes('Other'));
+  });
+
+  await test('bbox-less nodes do not throw and order deterministically', () => {
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'button', name: 'A' }, { ref: '@e2', role: 'link', name: 'B' }],
+      text: [], lookup: { '@e1': 1, '@e2': 2 },
+    });
+    assert.strictEqual(reduce(brief, {}).listing, reduce(brief, {}).listing);
+  });
+
+  await test('computeBriefHash: stable on content, ignores bbox, changes on name', () => {
+    const a = makeBrief();
+    assert.strictEqual(computeBriefHash(a), computeBriefHash(makeBrief()));
+    const moved = makeBrief({ elements: [{ ref: '@e1', role: 'textbox', name: 'Search', bbox: [9, 9, 1, 1] }] });
+    assert.strictEqual(computeBriefHash(a), computeBriefHash(moved), 'bbox excluded from hash');
+    const renamed = makeBrief({ elements: [{ ref: '@e1', role: 'textbox', name: 'Find', bbox: [100, 200, 300, 40] }] });
+    assert.notStrictEqual(computeBriefHash(a), computeBriefHash(renamed), 'name change busts hash');
+  });
+}
+
+async function validateSuite() {
+  console.log('\nvalidate:');
+
+  await test('accepts well-formed click/type/scroll/press/done', () => {
+    const { ok, errors } = validate([
+      action('click', { ref: '@e1' }),
+      action('type', { ref: '@e1', args: { text: 'hi' } }),
+      action('scroll', { args: { direction: 'down' } }),
+      action('press', { args: { key: 'Enter' } }),
+      action('done', { args: {} }),
+    ], { '@e1': 111 }, registry);
+    assert.strictEqual(errors.length, 0, JSON.stringify(errors));
+    assert.strictEqual(ok.length, 5);
+  });
+
+  await test('rejects @t target, unknown verb, missing arg, bad/absent ref', () => {
+    const lookup = { '@e1': 111, '@t1': 222 };
+    const cases = [
+      [action('click', { ref: '@t1' }), /requires ref type/],
+      [action('frobnicate', { ref: '@e1' }), /unknown verb/],
+      [action('type', { ref: '@e1', args: {} }), /missing required arg "text"/],
+      [action('click', { ref: '@e9' }), /not present in current snapshot/],
+      [action('scroll', { args: {} }), /missing required arg "direction"/],
+    ];
+    for (const [act, re] of cases) {
+      const { ok, errors } = validate([act], lookup, registry);
+      assert.strictEqual(ok.length, 0);
+      assert.match(errors[0].error, re);
+    }
+  });
+
+  await test('tolerates extra args', () => {
+    const { ok } = validate([action('press', { args: { key: 'Enter', bogus: 1 } })], {}, registry);
+    assert.strictEqual(ok.length, 1);
+  });
+}
+
+async function executeSuite() {
+  console.log('\nexecute (cdp):');
+
+  await test('click dispatches mouse at bbox-center minus scroll', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, { afterActionMs: 0, maxMs: 0 });
+    const [obs] = await exec.execute([action('click', { ref: '@e1' })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    const moves = session.calls.filter(c => c[0] === 'mouse');
+    assert.strictEqual(moves.length, 3, 'move/press/release');
+    assert.strictEqual(moves[0][1].x, 250);  // 100 + 300/2
+    assert.strictEqual(moves[0][1].y, 220);  // 200 + 40/2
+  });
+
+  await test('type focuses via pushed nodeId then insertText', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('type', { ref: '@e1', args: { text: 'hello' } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    assert.ok(session.calls.some(c => c[0] === 'focus' && c[1].nodeId === 9001));
+    assert.ok(session.calls.some(c => c[0] === 'insertText' && c[1].text === 'hello'));
+  });
+
+  await test('press Enter dispatches keyDown+keyUp', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('press', { args: { key: 'Enter' } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    const keys = session.calls.filter(c => c[0] === 'key');
+    assert.strictEqual(keys.length, 2);
+    assert.strictEqual(keys[0][1].type, 'keyDown');
+    assert.strictEqual(keys[0][1].key, 'Enter');
+    assert.strictEqual(keys[1][1].type, 'keyUp');
+  });
+
+  await test('scroll down dispatches a positive-deltaY wheel at viewport center', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('scroll', { args: { direction: 'down' } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    const wheel = session.calls.find(c => c[0] === 'mouse' && c[1].type === 'mouseWheel');
+    assert.ok(wheel, 'expected a mouseWheel event');
+    assert.ok(wheel[1].deltaY > 0, 'down scrolls with positive deltaY');
+    assert.strictEqual(wheel[1].x, 500);
+    assert.strictEqual(wheel[1].y, 400);
+  });
+
+  await test('done is ok with no dispatch and no settle', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('done', { args: { result: 'x' } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok');
+    assert.strictEqual(session.calls.length, 0, 'done dispatches nothing');
+    assert.strictEqual(session.settleArgs.length, 0, 'done does not settle');
+  });
+
+  await test('settle receives the run settle config', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, { afterActionMs: 321, maxMs: 999 });
+    await exec.execute([action('press', { args: { key: 'Tab' } })], session, makeBrief());
+    assert.deepStrictEqual(session.settleArgs[0], { afterActionMs: 321, maxMs: 999 });
+  });
+
+  await test('invalid ref yields an error observation, not a throw', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('click', { ref: '@e9' })], session, makeBrief());
+    assert.strictEqual(obs.status, 'error');
+    assert.match(obs.error, /not found in brief/);
+  });
+}
+
+async function loopSuite() {
+  console.log('\nloop:');
+
+  await test('type → press → scroll → done drives to completed', async () => {
+    installFakeProvider([
+      [action('type', { ref: '@e1', args: { text: 'hello' } })],
+      [action('press', { args: { key: 'Enter' } })],
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('done', { args: { result: 'searched' } })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief, makeBrief, makeBrief]);
+    const r = await run({ session, task: 'search hello', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.strictEqual(r.result, 'searched');
+    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['type', 'press', 'scroll', 'done']);
+    assert.ok(session.calls.some(c => c[0] === 'insertText' && c[1].text === 'hello'));
+    assert.ok(session.calls.some(c => c[0] === 'key' && c[1].key === 'Enter'));
+    assert.ok(session.calls.some(c => c[0] === 'mouse' && c[1].type === 'mouseWheel'));
+  });
+
+  await test('an all-invalid turn feeds the error back and the run continues', async () => {
+    installFakeProvider([
+      [action('click', { ref: '@t1' })],            // invalid: @t is not a click target
+      [action('done', { args: { result: 'ok' } })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.strictEqual(r.steps.length, 1, 'only the done step executed');
+    assert.strictEqual(r.steps[0].action.verb, 'done');
+  });
+
+  await test('no-change short-circuit polls until the page changes', async () => {
+    installFakeProvider([
+      [action('press', { args: { key: 'ArrowDown' } })],  // executes; page "unchanged"
+      [action('done', { args: {} })],
+    ]);
+    const same1 = makeBrief();
+    const same2 = makeBrief();                          // identical content ⇒ same hash
+    const changed = makeBrief({ title: 'Changed' });    // different hash
+    const session = makeFakeSession([same1, same2, changed]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 5 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    // turn1: 1 extract; turn2: 1 (same) + 1 (poll→changed) = 2 ⇒ 3 total
+    assert.strictEqual(session.extractCount, 3);
+  });
+
+  await test('max-steps is honored', async () => {
+    installFakeProvider([[action('press', { args: { key: 'ArrowDown' } })]]);  // never finishes
+    const session = makeFakeSession([makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxSteps: 3 } }) });
+    assert.strictEqual(r.status, 'max-steps');
+    assert.strictEqual(r.steps.length, 3);
+  });
+}
+
+// ─── main ────────────────────────────────────────────────────────────────────
+
+(async () => {
+  await reduceSuite();
+  await validateSuite();
+  await executeSuite();
+  await loopSuite();
+  console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exitCode = 1;
+})();

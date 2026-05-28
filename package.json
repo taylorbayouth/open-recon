@@ -11,7 +11,8 @@
     "launch": "node launch.js",
     "extract": "node cli.js --tree --pretty",
     "agent": "node agent.js",
-    "test": "node test/test.js"
+    "test": "node test/agent.test.js && node test/test.js",
+    "test:agent": "node test/agent.test.js"
   },
   "keywords": [
     "cdp",
