@@ -8,6 +8,9 @@ const fs = require('fs');
 const { flattenProperties, isInViewport, isLeanVisible, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect } = require('../lib/connect');
+const { resolveKey, scrollDeltaY } = require('../lib/executors/cdp');
+const { computeScreenPoint } = require('../lib/executors/os');
+const ACTIONS = require('../lib/actions');
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 
@@ -113,6 +116,92 @@ test('isLeanVisible: null bbox', () => {
 test('bboxArr: rounds floats and returns array', () => {
   const result = bboxArr({ x: 1.7, y: 2.3, width: 100.9, height: 50.1 });
   assert.deepStrictEqual(result, [2, 2, 101, 50]);
+});
+
+// ─── Action registry: new verbs ──────────────────────────────────────────────
+
+test('registry: scroll/key/navigate are refless with expected args', () => {
+  for (const verb of ['scroll', 'key', 'navigate']) {
+    assert.ok(ACTIONS[verb], `${verb} should be registered`);
+    assert.strictEqual(ACTIONS[verb].requiresRef, false, `${verb} should not require a ref`);
+  }
+  assert.strictEqual(ACTIONS.scroll.args.direction, 'string');
+  assert.strictEqual(ACTIONS.scroll.args.amount, 'number?');
+  assert.strictEqual(ACTIONS.key.args.key, 'string');
+  assert.strictEqual(ACTIONS.navigate.args.url, 'string');
+});
+
+// ─── CDP key resolution ───────────────────────────────────────────────────────
+
+test('resolveKey: enter carries text and keyCode 13', () => {
+  const k = resolveKey('Enter');
+  assert.strictEqual(k.keyCode, 13);
+  assert.strictEqual(k.key, 'Enter');
+  assert.strictEqual(k.text, '\r');
+});
+
+test('resolveKey: case-insensitive and aliases', () => {
+  assert.strictEqual(resolveKey('enter').keyCode, resolveKey('return').keyCode);
+  assert.strictEqual(resolveKey('ESC').keyCode, 27);
+  // delete is aliased to backspace to match the OS helper
+  assert.strictEqual(resolveKey('delete').keyCode, resolveKey('backspace').keyCode);
+});
+
+test('resolveKey: rawKeyDown keys carry no text', () => {
+  assert.strictEqual(resolveKey('Tab').text, undefined);
+  assert.strictEqual(resolveKey('ArrowDown').keyCode, 40);
+});
+
+test('resolveKey: unknown key throws', () => {
+  assert.throws(() => resolveKey('NopeKey'), /unknown key/);
+});
+
+// ─── CDP scroll delta ─────────────────────────────────────────────────────────
+
+test('scrollDeltaY: down is positive, up is negative', () => {
+  assert.strictEqual(scrollDeltaY('down', 300, 800), 300);
+  assert.strictEqual(scrollDeltaY('up', 300, 800), -300);
+});
+
+test('scrollDeltaY: default amount is ~80% of viewport height', () => {
+  assert.strictEqual(scrollDeltaY('down', undefined, 1000), 800);
+  assert.strictEqual(scrollDeltaY('up', 0, 1000), -800);   // 0/NaN falls back
+  assert.strictEqual(scrollDeltaY('down', undefined, undefined), 640); // 800*0.8
+});
+
+// ─── OS page→screen coordinate math ──────────────────────────────────────────
+
+test('computeScreenPoint: window origin + chrome offset, no scroll', () => {
+  const p = computeScreenPoint({
+    windowBounds: { left: 100, top: 50, width: 1200, height: 900 },
+    layout: { clientWidth: 1200, clientHeight: 800, pageX: 0, pageY: 0 },
+    visual: { clientWidth: 1200, clientHeight: 800 },
+    pageX: 10, pageY: 20,
+  });
+  // chromeOffsetY = 900-800 = 100, chromeOffsetX = 0
+  assert.deepStrictEqual(p, { x: 100 + 0 + 10, y: 50 + 100 + 20 });
+});
+
+test('computeScreenPoint: subtracts scroll offset', () => {
+  const p = computeScreenPoint({
+    windowBounds: { left: 0, top: 0, width: 1200, height: 888 },
+    layout: { clientWidth: 1200, clientHeight: 800, pageX: 5, pageY: 300 },
+    visual: { clientWidth: 1200, clientHeight: 800 },
+    pageX: 50, pageY: 500,
+  });
+  // chromeOffsetY = 888-800 = 88; y = 0 + 88 + (500-300) = 288
+  assert.deepStrictEqual(p, { x: 0 + 0 + (50 - 5), y: 288 });
+});
+
+test('computeScreenPoint: 88px fallback when no viewport metrics', () => {
+  const p = computeScreenPoint({
+    windowBounds: { left: 0, top: 0, width: 1000, height: 900 },
+    layout: {}, visual: {},
+    pageX: 0, pageY: 0,
+  });
+  // cssViewportHeight falls back to height-88 = 812 → chromeOffsetY = 88
+  assert.strictEqual(p.y, 88);
+  assert.strictEqual(p.x, 0);
 });
 
 // ─── Integration tests (requires Chrome running on port 9222) ────────────────
