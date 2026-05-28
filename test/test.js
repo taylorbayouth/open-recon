@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const CDP = require('chrome-remote-interface');
 
-const { flattenProperties, isInViewport, isLeanVisible, bboxArr } = require('../lib/extract');
+const { flattenProperties, isInViewport, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect } = require('../lib/connect');
 
@@ -121,6 +121,34 @@ test('isLeanVisible: zero-width bbox', () => {
 
 test('isLeanVisible: null bbox', () => {
   assert.strictEqual(isLeanVisible(null, null), false);
+});
+
+test('isCursorClickable: named generic node with cursor:pointer is clickable', () => {
+  assert.strictEqual(isCursorClickable('generic', 'Close dialog', { cursor: 'pointer' }), true);
+  assert.strictEqual(isCursorClickable('none', 'Menu', { cursor: 'pointer' }), true);
+  assert.strictEqual(isCursorClickable(undefined, 'X', { cursor: 'pointer' }), true);
+});
+
+test('isCursorClickable: requires a non-empty accessible name', () => {
+  // Name-gated to avoid inherited-cursor noise (nested spans) and ignored nodes.
+  assert.strictEqual(isCursorClickable('generic', null, { cursor: 'pointer' }), false);
+  assert.strictEqual(isCursorClickable('generic', '', { cursor: 'pointer' }), false);
+  assert.strictEqual(isCursorClickable('generic', '   ', { cursor: 'pointer' }), false);
+});
+
+test('isCursorClickable: requires cursor:pointer', () => {
+  assert.strictEqual(isCursorClickable('generic', 'Close', { cursor: 'default' }), false);
+  assert.strictEqual(isCursorClickable('generic', 'Close', { cursor: 'auto' }), false);
+  assert.strictEqual(isCursorClickable('generic', 'Close', null), false);
+  assert.strictEqual(isCursorClickable('generic', 'Close', {}), false);
+});
+
+test('isCursorClickable: semantic roles are excluded (handled by role/text paths)', () => {
+  // A real button/link/heading already gets captured by its role — the cursor
+  // path must not double-claim it.
+  assert.strictEqual(isCursorClickable('button', 'Save', { cursor: 'pointer' }), false);
+  assert.strictEqual(isCursorClickable('link', 'Home', { cursor: 'pointer' }), false);
+  assert.strictEqual(isCursorClickable('heading', 'Title', { cursor: 'pointer' }), false);
 });
 
 test('bboxArr: rounds floats and returns array', () => {
@@ -292,6 +320,31 @@ test('bboxArr: rounds floats and returns array', () => {
       // full mode does not apply isLeanVisible — at least one hidden element should appear
       const anyPresent = CSS_HIDDEN.some(h => names.includes(h));
       assert.ok(anyPresent, 'full mode should include at least one CSS-invisible element');
+    });
+
+    await testAsync('full mode surfaces a cursor:pointer clickable div (source "cursor")', async () => {
+      const result = await session.extract({ format: 'full' });
+      const close = result.elements.find(e => e.name === 'Close dialog');
+      assert.ok(close, '"Close dialog" labelled div should be captured');
+      assert.strictEqual(close.source, 'cursor', 'should be included via the cursor path, not role/focusable');
+    });
+
+    await testAsync('lean mode surfaces the cursor:pointer clickable div', async () => {
+      const result = await session.extract({ format: 'lean' });
+      assert.ok(result.elements.some(e => e.name === 'Close dialog'),
+        '"Close dialog" should appear in lean output');
+    });
+
+    await testAsync('tree mode surfaces the cursor:pointer clickable div', async () => {
+      const result = await session.extract({ format: 'tree' });
+      function allNames(node, names = []) {
+        if (!node) return names;
+        if (node.name) names.push(node.name);
+        if (node.children) node.children.forEach(c => allNames(c, names));
+        return names;
+      }
+      assert.ok(allNames(result.tree).includes('Close dialog'),
+        '"Close dialog" should appear in tree output');
     });
 
     // ─── Ref / lookup convention ─────────────────────────────────────────────

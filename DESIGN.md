@@ -84,7 +84,7 @@ The `listing` is a compact, fixed-width-ish text format optimized for LLM tokeni
 
 `reduce(brief, view)` builds it (config block `view`, see Configuration):
 
-- **Interleaved by reading order.** Interactive elements (`[@e]`) and text nodes (`[@t]`) are merged into one list sorted top-to-bottom, left-to-right (rows banded by ~10px, then by x), so a label sits next to the field it describes. `@t` lines are read-only grounding — the validator rejects them as action targets.
+- **Interleaved by reading order.** Interactive elements (`[@e]`) and text nodes (`[@t]`) are merged into one list sorted top-to-bottom, left-to-right (rows banded by ~10px, then by x), so a label sits next to the field it describes. `@t` lines are primarily read-only grounding, but can be a `click` or `selectText` target (e.g. clickable text inside a container); the validator still rejects them for `type`.
 - **`view.includeText`** (default true) — interleave text nodes at all.
 - **`view.includeCoords`** (default true) — append a rounded `(x,y)` center per line so the model can disambiguate repeated controls.
 - **`view.maxTextChars`** (default 200) — truncate long text-node names.
@@ -187,7 +187,7 @@ The single source of truth for every verb. Validator, Executor, and Prompt all r
 
 ```js
 module.exports = {
-  click:    { requiresRef: true,  refType: ['e'],       args: {} },
+  click:    { requiresRef: true,  refType: ['e', 't'],  args: {} },
   focus:    { requiresRef: true,  refType: ['e'],       args: {} },
   type:     { requiresRef: true,  refType: ['e'],       args: { text: 'string' } },
   press:    { requiresRef: false,                       args: { key: 'string' } },

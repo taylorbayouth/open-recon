@@ -206,10 +206,20 @@ async function validateSuite() {
     assert.strictEqual(ok.length, 5);
   });
 
-  await test('rejects @t target, unknown verb, missing arg, bad/absent ref', () => {
+  await test('click accepts both @e and @t targets', () => {
+    const lookup = { '@e1': 111, '@t1': 222 };
+    const { ok, errors } = validate([
+      action('click', { ref: '@e1' }),
+      action('click', { ref: '@t1' }),
+    ], lookup, registry);
+    assert.strictEqual(errors.length, 0, JSON.stringify(errors));
+    assert.strictEqual(ok.length, 2);
+  });
+
+  await test('rejects wrong ref type, unknown verb, missing arg, bad/absent ref', () => {
     const lookup = { '@e1': 111, '@t1': 222 };
     const cases = [
-      [action('click', { ref: '@t1' }), /requires ref type/],
+      [action('type', { ref: '@t1', args: { text: 'x' } }), /requires ref type/],  // type is @e-only
       [action('frobnicate', { ref: '@e1' }), /unknown verb/],
       [action('type', { ref: '@e1', args: {} }), /missing required arg "text"/],
       [action('click', { ref: '@e9' }), /not present in current snapshot/],
@@ -254,6 +264,17 @@ async function executeSuite() {
     assert.strictEqual(moves.length, 3, 'move/press/release');
     assert.strictEqual(moves[0][1].x, 250);  // 100 + 300/2
     assert.strictEqual(moves[0][1].y, 220);  // 200 + 40/2
+  });
+
+  await test('click on a @t text node dispatches mouse at its bbox center', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, { afterActionMs: 0, maxMs: 0 });
+    const [obs] = await exec.execute([action('click', { ref: '@t1' })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    const moves = session.calls.filter(c => c[0] === 'mouse');
+    assert.strictEqual(moves.length, 3, 'move/press/release');
+    assert.strictEqual(moves[0][1].x, 250);  // @t1 bbox [100,50,300,30] → 100 + 300/2
+    assert.strictEqual(moves[0][1].y, 65);   // 50 + 30/2
   });
 
   await test('type focuses via pushed nodeId then insertText', async () => {
@@ -387,7 +408,7 @@ async function loopSuite() {
 
   await test('an all-invalid turn feeds the error back and the run continues', async () => {
     installFakeProvider([
-      [action('click', { ref: '@t1' })],            // invalid: @t is not a click target
+      [action('type', { ref: '@t1', args: { text: 'x' } })],  // invalid: type is @e-only
       [action('done', { args: { result: 'ok' } })],
     ]);
     const session = makeFakeSession([makeBrief, makeBrief]);
@@ -579,7 +600,7 @@ async function memorySuite() {
 
   await test('a rejected action is recorded with its reason', async () => {
     const reqs = installFakeProvider([
-      [action('click', { ref: '@t1' })],   // @t is not a click target
+      [action('type', { ref: '@t1', args: { text: 'x' } })],   // type is @e-only ⇒ rejected
       [action('done', { args: {} })],
     ]);
     const session = makeFakeSession([makeBrief, makeBrief]);
@@ -587,7 +608,7 @@ async function memorySuite() {
     assert.strictEqual(r.status, 'completed', r.error);
     const t2 = reqs[1].messages[0].content;
     assert.match(t2, /rejected:/);
-    assert.match(t2, /clicked "Welcome"/);   // @t1's name is "Welcome"
+    assert.match(t2, /typed "x" into "Welcome"/);   // @t1's name is "Welcome"
   });
 }
 

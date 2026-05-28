@@ -89,6 +89,18 @@
       </div>
     </section>
 
+    <section aria-label="Custom widgets">
+      <h2>Custom widgets</h2>
+      <!-- #2: a click target with no role and no tabindex — not focusable — that
+           signals itself only with cursor:pointer + an aria-label for its name.
+           Must surface as an interactive element via the cursor path. -->
+      <div aria-label="Close dialog"
+           style="cursor:pointer; width:32px; height:32px; display:inline-block; background:#eee;"></div>
+      <!-- #6: a clickable container whose only name comes from its visible text,
+           so it surfaces as a @t node the model reaches by clicking the text. -->
+      <div style="cursor:pointer; padding:10px; border:1px solid #ccc; margin-top:8px;">Clickable Card Text</div>
+    </section>
+
     <!-- CSS filter test cases: these must never appear in lean or tree output -->
     <section aria-label="CSS filter tests" style="position:relative;">
       <button class="test-hidden-visibility">CSS visibility hidden button</button>
