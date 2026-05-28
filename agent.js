@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+require('dotenv').config();
+
 // Slice-1 smoke harness. Connects to Chrome on port 9222, runs an agent loop
 // against the current tab, prints the Run artifact as JSON.
 //
