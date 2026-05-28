@@ -162,14 +162,15 @@ The top-level artifact. Loop builds this incrementally and emits it on exit. Thi
   "task": "<the original goal>",
   "model": "claude-opus-4-7",
   "startedAt": "...", "endedAt": "...",
-  "status": "completed" | "failed" | "max-steps" | "aborted",
+  "status": "completed" | "failed" | "max-steps" | "stuck" | "empty-plan" | "aborted",
   "result": "...",                // from `done` action if status=completed
   "steps":       [ /* Step[] */ ],
   "completions": [ /* Completion[] */ ],
   "briefs":      [ /* Brief[] in temporal order, optional */ ],
   "stats": {
     "stepCount": …, "totalElapsedMs": …,
-    "totalInputTokens": …, "totalOutputTokens": …
+    "totalInputTokens": …, "totalOutputTokens": …,
+    "totalEstimatedPromptTokens": …
   }
 }
 ```
@@ -313,6 +314,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
 | `loop.maxNoChangePolls` | `10` | Give up waiting after this many polls and let the model act/finish. |
+| `loop.maxEmptyPlans` | `3` | Stop after this many consecutive LLM turns with no actions. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |

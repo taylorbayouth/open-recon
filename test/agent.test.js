@@ -18,6 +18,7 @@ const planMod = require('../lib/plan');
 const { run } = require('../lib/loop');
 const { loadConfig, ConfigError } = require('../lib/config');
 const { createLogger } = require('../lib/log');
+const { estimateTokens } = require('../lib/tokens');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -110,7 +111,7 @@ function action(verb, extra = {}) {
 const baseConfig = (overrides = {}) => ({
   provider: 'fake',
   model: null,
-  loop: { maxSteps: 10, shortCircuitOnNoChange: false, pollMs: 0, maxNoChangePolls: 1, ...(overrides.loop || {}) },
+  loop: { maxSteps: 10, shortCircuitOnNoChange: false, pollMs: 0, maxNoChangePolls: 1, maxEmptyPlans: 3, ...(overrides.loop || {}) },
   settle: { afterActionMs: 0, maxMs: 0 },
   view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
   executor: { backend: 'cdp' },
@@ -338,6 +339,16 @@ async function logSuite() {
   });
 }
 
+async function tokenSuite() {
+  console.log('\ntokens:');
+
+  await test('estimateTokens approximates strings and message objects', () => {
+    assert.strictEqual(estimateTokens(''), 0);
+    assert.strictEqual(estimateTokens('abcd'), 1);
+    assert.strictEqual(estimateTokens({ role: 'user', content: 'abcdefgh' }), 4);
+  });
+}
+
 async function loopSuite() {
   console.log('\nloop:');
 
@@ -394,6 +405,19 @@ async function loopSuite() {
     const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxSteps: 3 } }) });
     assert.strictEqual(r.status, 'max-steps');
     assert.strictEqual(r.steps.length, 3);
+  });
+
+  await test('empty-plan guard aborts after consecutive no-action turns', async () => {
+    installFakeProvider([[], [], [], [action('done', { args: {} })]]);
+    const session = makeFakeSession([makeBrief, makeBrief, makeBrief, makeBrief]);
+    const r = await run({
+      session,
+      task: 'x',
+      config: baseConfig({ loop: { maxEmptyPlans: 3 } }),
+    });
+    assert.strictEqual(r.status, 'empty-plan');
+    assert.match(r.result, /no actions for 3 consecutive turns/);
+    assert.strictEqual(r.steps.length, 0);
   });
 
   await test('no-op guard aborts when the model repeats a dead action', async () => {
@@ -469,6 +493,7 @@ async function memorySuite() {
     const lines = fs.readFileSync(path.join(dir, file), 'utf8').trim().split('\n').map(JSON.parse);
     const turn = lines.find(l => l.kind === 'turn');
     assert.strictEqual(turn.llmPayload.messages.length, 1);
+    assert.ok(turn.llmPayload.estimatedTokens > 0);
     assert.strictEqual(turn.llmPayload.messages[0].role, 'user');
     assert.ok(turn.llmPayload.messages[0].content.includes('find hello'));
     assert.ok(turn.llmPayload.messages[0].content.includes('@e1'));
@@ -525,6 +550,7 @@ async function memorySuite() {
   await executeSuite();
   await configSuite();
   await logSuite();
+  await tokenSuite();
   await loopSuite();
   await memorySuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

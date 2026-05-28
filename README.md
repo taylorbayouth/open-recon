@@ -167,7 +167,8 @@ All knobs live in `open-recon.config.json` at the repo root. CLI flags override 
     "maxSteps": 30,
     "shortCircuitOnNoChange": true, // skip the LLM call while the page is unchanged
     "pollMs": 1500,               // wait between re-checks while unchanged
-    "maxNoChangePolls": 10        // give up waiting after this many polls
+    "maxNoChangePolls": 10,       // give up waiting after this many polls
+    "maxEmptyPlans": 3            // stop after this many no-action LLM turns
   },
 
   "settle": { "afterActionMs": 150, "maxMs": 2000 },
@@ -199,6 +200,8 @@ Point `OPEN_RECON_CONFIG` at a different path to use an alternate file.
 ### No-change short-circuit
 
 Each turn, the loop hashes the page content and compares it to the snapshot the model last acted on. Ephemeral fields such as `timestamp`, `bbox`, and `stats` are excluded, so identical page states hash the same. If nothing changed, Open Recon **doesn't burn another LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes or `loop.maxNoChangePolls` is hit. This gives the agent a deterministic wait-for-change behavior without relying on a fixed "sleep and hope" timer. Disable by setting `loop.shortCircuitOnNoChange` to `false` in `open-recon.config.json`.
+
+If the model returns no actions repeatedly, the loop stops after `loop.maxEmptyPlans` consecutive empty plans. The default is `3`, which avoids wasting the rest of the run budget on identical no-op turns while still preserving the run artifact and logs.
 
 ---
 
