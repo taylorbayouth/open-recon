@@ -1,3 +1,6 @@
 node_modules/
 out.json
 *.log
+
+# Built native binary — per-platform, rebuild via native/macos/recon-input/build.sh
+native/macos/recon-input/bin/

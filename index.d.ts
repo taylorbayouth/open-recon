@@ -202,6 +202,33 @@ export declare class Session {
   close(): Promise<void>;
 }
 
+// ─── Executor config ─────────────────────────────────────────────────────────
+
+export interface HumanizeOptions {
+  /** Master switch. Default: true for `os` backend, ignored by `cdp`. */
+  enabled?: boolean;
+  /** Cursor travel speed in CSS pixels per second. Default: 1400. */
+  mouseSpeedPxPerSec?: number;
+  /** Max ± per-frame deviation from the Bezier path, in pixels. Default: 2. */
+  mouseJitterPx?: number;
+  /** Per-keystroke delay min (ms). Default: 25. */
+  keystrokeDelayMsMin?: number;
+  /** Per-keystroke delay max (ms). Default: 85. */
+  keystrokeDelayMsMax?: number;
+  /** Pause after arrival, before mouseDown (ms). Default min/max: 40/160. */
+  preClickPauseMsMin?: number;
+  preClickPauseMsMax?: number;
+}
+
+export interface ExecutorOptions {
+  /** Backend selection. Default: env OPEN_RECON_EXECUTOR or 'cdp'. */
+  backend?: 'cdp' | 'os';
+  /** Override path to the recon-input binary (os backend, macOS only). */
+  binPath?: string;
+  /** Humanlike motion / timing knobs. Only meaningful for the `os` backend. */
+  humanize?: HumanizeOptions;
+}
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 /** Open a persistent CDP session. Reuse for multiple extract() calls. */

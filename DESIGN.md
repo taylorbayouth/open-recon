@@ -33,7 +33,7 @@ This document captures the architecture, contracts, and conventions for the broa
 | Reduce | `Brief`, history | `LLMView` | `lib/reduce.js` | planned |
 | Plan | `LLMView`, goal, tools | `Completion` (→ `Action[]`) | `lib/plan.js` + `lib/providers/*` | planned |
 | Validate | `Action[]`, `Brief.lookup` | checked `Action[]` or errors | `lib/validate.js` | planned |
-| Execute | `Action[]`, `Session` | `Observation[]` | `lib/execute.js` | planned |
+| Execute | `Action[]`, `Session` | `Observation[]` | `lib/execute.js` + `lib/executors/*` | exists |
 | Loop | task, session | `Run` | `lib/loop.js` | planned |
 
 `lib/actions.js` (registry) and `lib/prompt.js` (system prompt + vocab generation) are shared modules used by multiple stages.
@@ -207,6 +207,79 @@ Rules:
 ### `done` semantics
 
 The LLM marks task completion by emitting `{ verb: "done", args: { result: "…" } }`. Loop captures the result and exits without re-snapshotting. `done` does *not* count toward step budget exhaustion (it always terminates cleanly).
+
+---
+
+## Executor backends
+
+`lib/execute.js` is a thin dispatcher. The actual input mechanics live in pluggable backends under `lib/executors/`:
+
+| Backend | Module | Mechanism | Use case |
+|---|---|---|---|
+| `cdp` | `lib/executors/cdp.js` | `Input.dispatchMouseEvent` / `Input.insertText` via CDP | CI, headless tests, dev iteration |
+| `os`  | `lib/executors/os.js`  | `CGEventPost` via the `recon-input` Swift helper | Production / stealth runs (macOS) |
+
+Backends are selected per Run via the `executor` option on `loop.run()` (or via the `OPEN_RECON_EXECUTOR` env var). The default is `cdp` to keep tests trivial; production should set `os`.
+
+### Why two backends
+
+CDP input is convenient (zero dependencies, works headless, works on Linux) but synthesized: it never traverses the HID layer, motion is teleported, and timing is uniformly tight. Modern bot-detection vendors fingerprint that even when no script is injected.
+
+OS-level input via `CGEventPost` goes through the same kernel pipeline as a real mouse/keyboard, so in-page JS sees `isTrusted: true` events with real timing and (when humanize is on) Bezier motion. This is the path designed to avoid bot detection.
+
+### Backend interface
+
+```js
+{
+  name: 'cdp' | 'os',
+  async init() {},                          // boot resources (e.g., spawn helper)
+  async close() {},                         // tear them down
+  async click({ session, brief, ref }) {},  // one handler per verb in actions.js
+  async type({ session, brief, ref, text }) {},
+  // … one handler per non-terminal verb …
+}
+```
+
+`execute.js` owns the Observation envelope (status, error, elapsedMs, settleMs) and calls `session.settle()` after every non-`done` action. Backends only do dispatch.
+
+### Coordinate translation (os backend)
+
+The brief's bboxes are in CSS page coordinates relative to the document. CGEvent wants screen coordinates. The translation is:
+
+```
+screen.x = window.left + chromeOffsetX + (pageX - scrollX)
+screen.y = window.top  + chromeOffsetY + (pageY - scrollY)
+```
+
+- `window.{left,top,width,height}` — from `Browser.getWindowBounds`.
+- `scrollX`, `scrollY` — from `Page.getLayoutMetrics().cssLayoutViewport.{pageX,pageY}`.
+- `chromeOffsetY` — Chrome's title + tab + URL bar height. Computed as `windowBounds.height - cssVisualViewport.clientHeight`.
+- `chromeOffsetX` — usually 0; computed analogously for completeness.
+
+This avoids a hand-tuned constant for Chrome's chrome — the offset is recomputed every dispatch, so it's robust to user toggling the bookmarks bar or zoom.
+
+### Humanize config
+
+Off by default for `cdp`, on by default for `os`. All knobs flow through `executor.humanize` on the Run config:
+
+```js
+{
+  executor: {
+    backend: 'os',
+    humanize: {
+      enabled: true,
+      mouseSpeedPxPerSec: 1400,
+      mouseJitterPx: 2,
+      keystrokeDelayMsMin: 25,
+      keystrokeDelayMsMax: 85,
+      preClickPauseMsMin: 40,
+      preClickPauseMsMax: 160,
+    }
+  }
+}
+```
+
+Mouse motion is a cubic Bezier from current cursor position to target with a small random sway on the control points (~10% of distance) and per-frame jitter. Travel time is `distance / mouseSpeedPxPerSec` at 60Hz. Keystrokes wait a uniform-random delay in `[keystrokeDelayMsMin, keystrokeDelayMsMax]` between characters. A `preClickPause` lands after arrival, before button-down — mimicking the human pause between "I'm here" and "I'm clicking".
 
 ---
 
