@@ -12,21 +12,23 @@ Done. 23 elements in 373ms
 
 ```json
 {
+  "schemaVersion": "2.0",
   "url": "https://www.linkedin.com/feed/",
   "title": "Feed | LinkedIn",
   "timestamp": "2026-05-28T00:15:27.016Z",
   "viewport": { "width": 1200, "height": 840, "scrollX": 0, "scrollY": 0 },
   "elements": [
     {
+      "ref": "@e1",
       "role": "button",
       "name": "LinkedIn",
-      "backendNodeId": 1276,
       "bbox": { "x": 72, "y": 18, "width": 68, "height": 68 },
       "inViewport": true
     }
   ],
   "text": [
     {
+      "ref": "@t1",
       "role": "heading",
       "name": "Taylor's Feed",
       "bbox": { "x": 140, "y": 24, "width": 220, "height": 32 },
@@ -34,6 +36,10 @@ Done. 23 elements in 373ms
       "level": 1
     }
   ],
+  "lookup": {
+    "@e1": 1276,
+    "@t1": 1419
+  },
   "stats": {
     "totalAXNodes": 2443,
     "interactiveFound": 208,
@@ -137,6 +143,7 @@ node index.js --lean --in-viewport-only --pretty
 
 ```
 {
+  schemaVersion: "2.0"
   url:       string          — URL of the captured tab
   title:     string          — page title
   timestamp: string          — ISO 8601 capture time
@@ -148,22 +155,36 @@ node index.js --lean --in-viewport-only --pretty
   }
   elements:  Element[]       — interactive elements (see below)
   text:      TextNode[]      — visible text nodes
+  lookup:    { [ref]: number } — maps each `ref` to its CDP backendNodeId
   stats:     Stats
 }
 ```
+
+### Reference convention
+
+Every interactive element and text node gets a stable string `ref` of the form `@<type><n>`:
+
+- `@` prefix marks the string as a reference, so it can't be confused with numbers on the page.
+- `<type>` is one lowercase letter: `e` for interactive element, `t` for text node.
+- `<n>` is a positive integer, assigned in document order. Elements and text use independent counters — `@e1` and `@t1` can coexist.
+
+Regex: `/^@[et]\d+$/`.
+
+Refs are **scoped to a single snapshot**. A new extraction reassigns everything — never cache a ref across snapshots, and never act on a ref from an earlier brief. After any action that may have changed the page (click, navigation, scroll, keypress), re-snapshot before deciding what to do next. The `lookup` table maps each ref to a live CDP `backendNodeId` for the current session; executors should treat refs as opaque strings and resolve via `lookup`.
+
+**Action targets:** `@e` refs are the only valid targets for action verbs (click, focus, type, …). `@t` refs are grounding context — the LLM may reference them in prose ("the heading @t3 says X") but should not emit `click(@t3)`. The validator should reject `@t` refs in target-bearing actions. If a future verb addresses text directly (e.g., `extract(@t3)`), it can be added explicitly without breaking this default.
 
 ### Element
 
 ```
 {
+  ref:           string        — "@e<n>" — see Reference convention
   role:          string        — ARIA role (button, link, textbox, …)
   name:          string|null   — accessible name
-  backendNodeId: number        — stable DOM node reference for CDP calls
   bbox:          Bbox|null     — { x, y, width, height } in page coordinates
   inViewport:    boolean
 
   // full mode only (omitted in --lean):
-  nodeId:        number
   source:        "role"|"focusable"
   focusable:     boolean|null
   computedStyle: { cursor, display, visibility, opacity, pointer-events,
@@ -184,9 +205,9 @@ node index.js --lean --in-viewport-only --pretty
 
 ```
 {
+  ref:           string        — "@t<n>" — see Reference convention
   role:          string        — heading, paragraph, StaticText, label, …
   name:          string        — text content
-  backendNodeId: number        — (full mode only)
   bbox:          Bbox|null
   inViewport:    boolean
   level:         number        — heading level (h1=1…h6=6), if applicable
@@ -229,14 +250,17 @@ Sub-runs (`InlineTextBox`, `LineBreak`) are intentionally excluded — they're f
 
 Pass the snapshot to any LLM that can read JSON. In `--lean --in-viewport-only` mode, a typical page compresses to a few thousand tokens — small enough to fit alongside system prompts and tool definitions.
 
-The `backendNodeId` on each element is a stable CDP reference you can use to drive interactions in the same session:
+Each element and text node carries a short `ref` string (`@e1`, `@t1`, …) that the LLM can reference in actions. The snapshot's `lookup` table resolves each ref to a CDP `backendNodeId` for the same session:
 
 ```js
-// Click a button by backendNodeId
-const { nodeId } = await DOM.requestNode({ backendNodeId: 1276 });
+// LLM says: { action: "focus", ref: "@e3" }
+const backendNodeId = snapshot.lookup[ref];               // e.g. 144
+const { nodeId } = await DOM.requestNode({ backendNodeId });
 await DOM.focus({ nodeId });
-// or use Input.dispatchMouseEvent with the bbox coordinates
+// or use Input.dispatchMouseEvent with the element's bbox coordinates
 ```
+
+Refs are reassigned on every snapshot, so pair each LLM action with the snapshot it was derived from. Executors should treat refs as opaque strings — validate against `/^@[et]\d+$/` and look them up rather than parsing.
 
 ---
 

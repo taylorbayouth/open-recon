@@ -150,9 +150,10 @@ test('bboxArr: rounds floats and returns array', () => {
 
     await testAsync('tree mode returns a RootWebArea root', async () => {
       const result = await session.extract({ format: 'tree' });
-      assert.strictEqual(result.schemaVersion, '1.0');
+      assert.strictEqual(result.schemaVersion, '2.0');
       assert.ok(result.tree, 'tree should not be null');
       assert.strictEqual(result.tree.role, 'RootWebArea');
+      assert.ok(result.lookup && typeof result.lookup === 'object', 'lookup should be present');
     });
 
     await testAsync('tree mode finds form with inputs', async () => {
@@ -267,6 +268,63 @@ test('bboxArr: rounds floats and returns array', () => {
       // full mode does not apply isLeanVisible — at least one hidden element should appear
       const anyPresent = CSS_HIDDEN.some(h => names.includes(h));
       assert.ok(anyPresent, 'full mode should include at least one CSS-invisible element');
+    });
+
+    // ─── Ref / lookup convention ─────────────────────────────────────────────
+    const REF_RE = /^@[et]\d+$/;
+
+    function assertRefInvariants(records, lookup, prefix) {
+      const refs = records.map(r => r.ref);
+      // a) every record has a ref matching the regex
+      for (const ref of refs) {
+        assert.ok(REF_RE.test(ref), `ref "${ref}" should match ${REF_RE}`);
+        assert.ok(ref.startsWith(prefix), `ref "${ref}" should start with "${prefix}"`);
+      }
+      // c) counters are dense, start at 1
+      const ns = refs.map(r => Number(r.slice(2))).sort((a, b) => a - b);
+      ns.forEach((n, i) => assert.strictEqual(n, i + 1, `${prefix} refs should be dense from 1`));
+      // b) every ref resolves in lookup to a number
+      for (const ref of refs) {
+        assert.strictEqual(typeof lookup[ref], 'number', `lookup["${ref}"] should be a number`);
+      }
+      // d) no backendNodeId leaked onto record bodies
+      for (const r of records) {
+        assert.strictEqual(r.backendNodeId, undefined, 'record body should not include backendNodeId');
+        assert.strictEqual(r.nodeId, undefined, 'record body should not include nodeId');
+      }
+    }
+
+    await testAsync('lean mode: refs + lookup invariants', async () => {
+      const result = await session.extract({ format: 'lean' });
+      assert.strictEqual(result.schemaVersion, '2.0');
+      assert.ok(result.lookup);
+      assertRefInvariants(result.elements, result.lookup, '@e');
+      assertRefInvariants(result.text, result.lookup, '@t');
+      const usedRefs = new Set([...result.elements, ...result.text].map(r => r.ref));
+      const lookupKeys = new Set(Object.keys(result.lookup));
+      assert.deepStrictEqual(lookupKeys, usedRefs, 'lookup keys should equal set of used refs');
+    });
+
+    await testAsync('full mode: refs + lookup invariants', async () => {
+      const result = await session.extract({ format: 'full' });
+      assert.strictEqual(result.schemaVersion, '2.0');
+      assertRefInvariants(result.elements, result.lookup, '@e');
+      assertRefInvariants(result.text, result.lookup, '@t');
+    });
+
+    await testAsync('tree mode: leaves carry refs, lookup covers them', async () => {
+      const result = await session.extract({ format: 'tree' });
+      const leafRefs = [];
+      (function walk(node) {
+        if (!node) return;
+        if (node.ref) leafRefs.push(node.ref);
+        if (node.children) node.children.forEach(walk);
+      })(result.tree);
+      assert.ok(leafRefs.length > 0, 'tree should have at least one ref leaf');
+      for (const ref of leafRefs) {
+        assert.ok(REF_RE.test(ref), `ref "${ref}" should match ${REF_RE}`);
+        assert.strictEqual(typeof result.lookup[ref], 'number', `lookup["${ref}"] missing`);
+      }
     });
 
   } finally {

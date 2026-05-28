@@ -33,12 +33,21 @@ export interface ComputedStyle {
 
 // ─── Full / lean mode ────────────────────────────────────────────────────────
 
+/**
+ * Stable reference assigned at extract time. Format: `@<type><n>` where
+ * `<type>` is `e` (interactive element) or `t` (text node). Stable within a
+ * single snapshot only — a new extraction reassigns. Regex: `/^@[et]\d+$/`.
+ */
+export type ElementRef = string;
+
+/** Maps each `ref` to its CDP `backendNodeId` for the current session. */
+export type RefLookup = Record<ElementRef, number>;
+
 export interface FullElement {
+  ref: ElementRef;
   role: string | null;
   name: string | null;
   source: 'role' | 'focusable';
-  backendNodeId: number;
-  nodeId: string;
   focusable: boolean | null;
   expanded: boolean | null;
   checked: boolean | 'mixed' | null;
@@ -51,9 +60,9 @@ export interface FullElement {
 }
 
 export interface LeanElement {
+  ref: ElementRef;
   role: string | null;
   name: string | null;
-  backendNodeId: number;
   bbox: BBox | null;
   inViewport: boolean;
   value?: string;
@@ -65,9 +74,9 @@ export interface LeanElement {
 }
 
 export interface TextNode {
+  ref: ElementRef;
   role: string | null;
   name: string;
-  backendNodeId: number;
   level: number | null;
   bbox: BBox | null;
   inViewport: boolean;
@@ -84,19 +93,21 @@ export interface FlatStats {
 }
 
 export interface FlatResult {
-  schemaVersion: '1.0';
+  schemaVersion: '2.0';
   url: string;
   title: string;
   timestamp: string;
   viewport: Viewport;
   elements: FullElement[] | LeanElement[];
   text: TextNode[];
+  lookup: RefLookup;
   stats: FlatStats;
 }
 
 // ─── Tree mode ───────────────────────────────────────────────────────────────
 
 export interface TreeInteractiveNode {
+  ref: ElementRef;
   role: string;
   name?: string;
   bbox: BBoxArray;
@@ -110,6 +121,7 @@ export interface TreeInteractiveNode {
 }
 
 export interface TreeTextNode {
+  ref: ElementRef;
   role: string;
   name: string;
   bbox?: BBoxArray;
@@ -133,12 +145,13 @@ export interface TreeStats {
 }
 
 export interface TreeResult {
-  schemaVersion: '1.0';
+  schemaVersion: '2.0';
   url: string;
   title: string;
   timestamp: string;
   viewport: Viewport;
   tree: TreeContainerNode | null;
+  lookup: RefLookup;
   stats: TreeStats;
 }
 
