@@ -137,6 +137,42 @@ node agent.js --provider anthropic "..."                 # different LLM
 
 ---
 
+## Configuration
+
+All knobs live in `open-recon.config.json` at the repo root. CLI flags override the file; env vars sit in between. Precedence: built-in defaults → `open-recon.config.json` → env → CLI flags.
+
+```jsonc
+{
+  "provider": "openai",          // openai | anthropic | ollama
+  "model": null,                  // null → provider's own default
+
+  "loop": {
+    "maxSteps": 30,
+    "shortCircuitOnNoChange": true, // skip the LLM call while the page is unchanged
+    "pollMs": 1500,               // wait between re-checks while unchanged
+    "maxNoChangePolls": 10        // give up waiting after this many polls
+  },
+
+  "settle": { "afterActionMs": 150, "maxMs": 2000 },
+
+  "executor": {
+    "backend": "cdp",             // cdp | os
+    "binPath": null,
+    "humanize": { "enabled": true, "mouseSpeedPxPerSec": 1400, "mouseJitterPx": 2,
+                  "keystrokeDelayMsMin": 25, "keystrokeDelayMsMax": 85,
+                  "preClickPauseMsMin": 40, "preClickPauseMsMax": 160 }
+  }
+}
+```
+
+Point `OPEN_RECON_CONFIG` at a different path to use an alternate file.
+
+### No-change short-circuit
+
+Each turn, the loop hashes the page (content only — `timestamp`, `bbox`, and `stats` are excluded) and compares it to what the model last acted on. If nothing changed, it **doesn't burn an LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes (proceed immediately) or `loop.maxNoChangePolls` is hit (proceed anyway). This is how the agent waits out a slow page load without a fixed timer, and avoids paying for identical turns. Disable with `--no-short-circuit`.
+
+---
+
 ## LLM providers
 
 The `Plan` stage is provider-agnostic. Three are built in; pick per-run with `--provider` or the `OPEN_RECON_PROVIDER` env var.

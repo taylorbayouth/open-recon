@@ -1,0 +1,30 @@
+{
+  "provider": "openai",
+  "model": null,
+
+  "loop": {
+    "maxSteps": 30,
+    "shortCircuitOnNoChange": true,
+    "pollMs": 1500,
+    "maxNoChangePolls": 10
+  },
+
+  "settle": {
+    "afterActionMs": 150,
+    "maxMs": 2000
+  },
+
+  "executor": {
+    "backend": "cdp",
+    "binPath": null,
+    "humanize": {
+      "enabled": true,
+      "mouseSpeedPxPerSec": 1400,
+      "mouseJitterPx": 2,
+      "keystrokeDelayMsMin": 25,
+      "keystrokeDelayMsMax": 85,
+      "preClickPauseMsMin": 40,
+      "preClickPauseMsMax": 160
+    }
+  }
+}

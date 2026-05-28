@@ -19,64 +19,70 @@ require('dotenv').config();
 
 const { connect } = require('./lib/connect');
 const { run } = require('./lib/loop');
-const { DEFAULT_PROVIDER } = require('./lib/plan');
+const { loadConfig, deepMerge } = require('./lib/config');
 
+// Parse CLI flags into a partial config override. Only keys actually passed are
+// set (everything else stays undefined), so deepMerge leaves config-file values
+// intact for unspecified flags.
 function parseArgs(argv) {
-  const args = {
-    task: null,
-    maxSteps: 30,
-    verbose: false,
-    model: undefined,
-    provider: undefined,
-    executor: { backend: undefined, humanize: {} },
-  };
+  const args = { task: null, verbose: false };
+  const override = { loop: {}, executor: { humanize: {} } };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task' || a === '-t') args.task = argv[++i];
-    else if (a === '--max-steps') args.maxSteps = parseInt(argv[++i], 10);
-    else if (a === '--model') args.model = argv[++i];
-    else if (a === '--provider' || a === '-p') args.provider = argv[++i];
     else if (a === '--verbose' || a === '-v') args.verbose = true;
-    else if (a === '--executor') args.executor.backend = argv[++i];
-    else if (a === '--no-humanize') args.executor.humanize.enabled = false;
-    else if (a === '--mouse-speed') args.executor.humanize.mouseSpeedPxPerSec = parseFloat(argv[++i]);
-    else if (a === '--mouse-jitter') args.executor.humanize.mouseJitterPx = parseFloat(argv[++i]);
+    else if (a === '--provider' || a === '-p') override.provider = argv[++i];
+    else if (a === '--model') override.model = argv[++i];
+    else if (a === '--max-steps') override.loop.maxSteps = parseInt(argv[++i], 10);
+    else if (a === '--poll-ms') override.loop.pollMs = parseInt(argv[++i], 10);
+    else if (a === '--no-short-circuit') override.loop.shortCircuitOnNoChange = false;
+    else if (a === '--executor') override.executor.backend = argv[++i];
+    else if (a === '--no-humanize') override.executor.humanize.enabled = false;
+    else if (a === '--mouse-speed') override.executor.humanize.mouseSpeedPxPerSec = parseFloat(argv[++i]);
+    else if (a === '--mouse-jitter') override.executor.humanize.mouseJitterPx = parseFloat(argv[++i]);
     else if (a === '--keystroke-delay') {
       const [lo, hi] = argv[++i].split(',').map(n => parseInt(n, 10));
-      args.executor.humanize.keystrokeDelayMsMin = lo;
-      args.executor.humanize.keystrokeDelayMsMax = Number.isFinite(hi) ? hi : lo;
+      override.executor.humanize.keystrokeDelayMsMin = lo;
+      override.executor.humanize.keystrokeDelayMsMax = Number.isFinite(hi) ? hi : lo;
     }
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else positional.push(a);
   }
   if (!args.task && positional.length) args.task = positional.join(' ');
+  args.override = override;
   return args;
 }
 
 function printHelp() {
   console.log(`Usage: node agent.js [options] <task>
 
+All knobs live in open-recon.config.json. CLI flags below override the file.
+
 Options:
   --task, -t <string>          The task for the agent (or pass as positional)
-  --provider, -p <name>        LLM provider: openai | anthropic | ollama.
-                               Default: env OPEN_RECON_PROVIDER or 'openai'.
+  --provider, -p <name>        LLM provider: openai | anthropic | ollama
   --model <id>                 Override the provider's default model
-  --max-steps <n>              Max loop iterations (default: 30)
-  --verbose, -v                Log each loop turn to stderr
+  --max-steps <n>              Max loop iterations
+  --poll-ms <n>                Wait between re-checks while the page is unchanged
+  --no-short-circuit           Always re-prompt, even if the page is unchanged
   --executor <cdp|os>          Input backend. 'os' uses recon-input (macOS).
-                               Default: env OPEN_RECON_EXECUTOR or 'cdp'.
   --no-humanize                Disable Bezier motion / keystroke delays (os only)
-  --mouse-speed <px/s>         Cursor travel speed (default: 1400)
-  --mouse-jitter <px>          Max ± deviation from path (default: 2)
-  --keystroke-delay <lo[,hi]>  Per-character delay range in ms (default: 25,85)
+  --mouse-speed <px/s>         Cursor travel speed
+  --mouse-jitter <px>          Max ± deviation from path
+  --keystroke-delay <lo[,hi]>  Per-character delay range in ms
+  --verbose, -v                Log each loop turn to stderr
   --help, -h                   Show this help
+
+Config file:
+  open-recon.config.json       All defaults; CLI flags override. Path override:
+                               OPEN_RECON_CONFIG.
 
 Environment:
   OPENAI_API_KEY          Required for the openai provider (the default).
   ANTHROPIC_API_KEY       Required for the anthropic provider.
-  OPEN_RECON_PROVIDER     Default LLM provider ('openai', 'anthropic', 'ollama').
-  OPEN_RECON_EXECUTOR     Default executor backend ('cdp' or 'os').`);
+  OPEN_RECON_PROVIDER     Override config provider ('openai'|'anthropic'|'ollama').
+  OPEN_RECON_EXECUTOR     Override config executor backend ('cdp'|'os').`);
 }
 
 // Each provider needs different credentials. Validate the one we'll actually
@@ -100,8 +106,10 @@ async function main() {
     process.exit(2);
   }
 
-  const provider = args.provider || process.env.OPEN_RECON_PROVIDER || DEFAULT_PROVIDER;
-  const credError = checkProviderCredentials(provider);
+  // Final config: DEFAULTS < file < env (all from loadConfig) < CLI flags.
+  const config = deepMerge(loadConfig(), args.override);
+
+  const credError = checkProviderCredentials(config.provider);
   if (credError) {
     console.error(`error: ${credError}`);
     process.exit(2);
@@ -110,15 +118,7 @@ async function main() {
   let session;
   try {
     session = await connect({ port: 9222 });
-    const runArtifact = await run({
-      session,
-      task: args.task,
-      provider,
-      model: args.model,
-      maxSteps: args.maxSteps,
-      verbose: args.verbose,
-      executor: args.executor,
-    });
+    const runArtifact = await run({ session, task: args.task, config, verbose: args.verbose });
     process.stdout.write(JSON.stringify(runArtifact, null, 2) + '\n');
     process.exitCode = runArtifact.status === 'completed' ? 0 : 1;
   } finally {

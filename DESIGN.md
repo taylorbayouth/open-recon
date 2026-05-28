@@ -283,29 +283,55 @@ Mouse motion is a cubic Bezier from current cursor position to target with a sma
 
 ---
 
+## Configuration
+
+All tunable knobs live in `open-recon.config.json` at the repo root, loaded by `lib/config.js`. Resolution order, lowest to highest priority:
+
+```
+DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
+```
+
+`loadConfig()` returns the merged DEFAULTS+file+env config; `agent.js` layers CLI flags on top via `deepMerge` and passes the final object as `run({ config })`. `deepMerge` skips `undefined`, so a partial override (one CLI flag, a half-populated file) never wipes sibling defaults. Library callers can pass a partial `config` to `run()` — it's merged over DEFAULTS internally.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `provider` | `openai` | LLM provider (also `OPEN_RECON_PROVIDER`). |
+| `model` | `null` | `null` → provider's own default. |
+| `loop.maxSteps` | `30` | Hard cap on LLM turns. |
+| `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
+| `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
+| `loop.maxNoChangePolls` | `10` | Give up waiting after this many polls and let the model act/finish. |
+| `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
+| `settle.maxMs` | `2000` | Hard cap on settle. |
+| `executor.backend` | `cdp` | `cdp` or `os` (also `OPEN_RECON_EXECUTOR`). |
+| `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
+
+---
+
+## No-change short-circuit
+
+Each turn, before spending an LLM call, the loop compares the new brief's `briefHash` against the hash of the page the model last acted on. If they match, the page hasn't changed — re-prompting with identical input would yield the identical action — so the loop **polls every `loop.pollMs` instead of calling the LLM**, until either the page changes (proceed immediately) or `loop.maxNoChangePolls` is exhausted (proceed anyway, so a genuinely static page lets the model try something else or finish). This is the "wait for the page to actually change" behavior, content-driven rather than timer-driven.
+
+Two correctness details:
+
+- **`briefHash` excludes ephemeral data.** `computeBriefHash` (in `reduce.js`) is a whitelist over `url`, `title`, `viewport`, and per-element/text *content* — `timestamp`, `elapsedMs`, `stats`, and `bbox` are never included. Without this, every snapshot would hash uniquely and the short-circuit would never fire. `bbox` is excluded deliberately: the LLM's listing carries no coordinates, so two layouts with identical elements are identical to the model.
+- **No-op actions don't deadlock.** After a validation failure (nothing executed) the loop clears `lastHash` so the next turn re-prompts immediately rather than polling for a change that can't come. A genuine no-op action (focus, a checkbox that only mutates internal state) hits `maxNoChangePolls` and proceeds; total turns are still bounded by `maxSteps`.
+
+---
+
 ## Settle contract
 
 The biggest hidden risk in any browser-agent loop is snapshotting mid-transition: a click fires, the DOM mutates, async work runs, and a brief taken immediately after captures a half-rendered page. The LLM gets garbage on the next turn.
 
-**Decision: settle is mandatory infrastructure, not an LLM responsibility.**
+**Decision: settle is mandatory infrastructure, not an LLM responsibility.** Settle is a small post-action pause (`settle.afterActionMs`); the "wait until the page actually changes" work is done by the no-change short-circuit above, which polls at `loop.pollMs`.
 
 ### Implementation
 
-Add `session.settle(opts)` as a primitive on the Session object. It returns when the page is judged stable.
+`session.settle(opts)` is a primitive on the Session object. Current implementation: a fixed pause of `settle.afterActionMs` (capped at `settle.maxMs`), so the next snapshot isn't taken mid-mutation. Execute calls it after every dispatched action, and records the elapsed time on the Observation as `settleMs`.
 
-Settle waits for the **first** of:
+The heavier "is the page actually done changing?" question is answered by the loop's no-change short-circuit (above), which polls the content hash rather than the wall clock. A future refinement can make `settle()` itself event-driven — return on the first of `Page.lifecycleEvent` (`networkAlmostIdle`/`load`) or an AX-tree-quiet window — but the hash-poll already covers the practical case without per-poll CDP wiring.
 
-1. `Page.lifecycleEvent` reporting `networkAlmostIdle` or `load` (if a navigation happened);
-2. An AX-tree-quiet check — poll `Accessibility.getFullAXTree` briefly and confirm no structural changes for ~150ms;
-3. A hard cap (~2000ms, configurable) to avoid hanging on infinite spinners.
-
-```js
-await session.settle({ quietMs: 150, maxMs: 2000 });
-```
-
-Execute calls `settle()` after every dispatched action, before constructing the Observation. `settle.elapsedMs` is recorded on the Observation as `settleMs` so we can tune the defaults from real data.
-
-The LLM verb `wait` is *not* the settle mechanism — it's for deliberate pauses (animation, debouncing, throttled UI). Universal settle still runs after every `wait`.
+The LLM verb `wait` is *not* the settle mechanism — it's for deliberate pauses (animation, debouncing, throttled UI). Settle still runs after every `wait`.
 
 ---
 
