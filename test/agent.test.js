@@ -395,6 +395,37 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'max-steps');
     assert.strictEqual(r.steps.length, 3);
   });
+
+  await test('no-op guard aborts when the model repeats a dead action', async () => {
+    installFakeProvider([[action('click', { ref: '@e1' })]]);  // same click forever
+    const session = makeFakeSession([makeBrief]);              // page never changes ⇒ no-op
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 } }),
+    });
+    assert.strictEqual(r.status, 'stuck', r.error);
+    // click executes twice; the 3rd identical pick (with no page change) aborts.
+    assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('repeating an action does NOT abort when the page keeps changing', async () => {
+    installFakeProvider([
+      [action('click', { ref: '@e1' })],
+      [action('click', { ref: '@e1' })],
+      [action('done', { args: {} })],
+    ]);
+    // Distinct hashes each turn ⇒ changed=true ⇒ streak never builds.
+    const session = makeFakeSession([
+      () => makeBrief({ title: 'A' }),
+      () => makeBrief({ title: 'B' }),
+      () => makeBrief({ title: 'C' }),
+    ]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+  });
 }
 
 async function memorySuite() {
@@ -421,6 +452,26 @@ async function memorySuite() {
     assert.strictEqual(reqs[1].messages.length, 1);
     assert.ok(!reqs[1].messages.some(m => m.role === 'assistant'), 'no transcript replay');
     assert.match(reqs[1].messages[0].content, /typed "hello" into "Search"/);
+  });
+
+  await test('turn log includes the simplified LLM payload', async () => {
+    installFakeProvider([[action('done', { args: {} })]]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-log-'));
+    const session = makeFakeSession([makeBrief]);
+    const r = await run({
+      session,
+      task: 'find hello',
+      config: { ...baseConfig(), log: { enabled: true, dir } },
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+
+    const file = fs.readdirSync(dir).find(f => f.endsWith('.jsonl'));
+    const lines = fs.readFileSync(path.join(dir, file), 'utf8').trim().split('\n').map(JSON.parse);
+    const turn = lines.find(l => l.kind === 'turn');
+    assert.strictEqual(turn.llmPayload.messages.length, 1);
+    assert.strictEqual(turn.llmPayload.messages[0].role, 'user');
+    assert.ok(turn.llmPayload.messages[0].content.includes('find hello'));
+    assert.ok(turn.llmPayload.messages[0].content.includes('@e1'));
   });
 
   await test('only the current page is included, not prior snapshots', async () => {
