@@ -14,7 +14,7 @@
 ## See it
 
 ```
-taylorbayouth@dev open-recon % node agent.js --verbose "Go to news.ycombinator.com. \
+you@dev open-recon % node agent.js --verbose "Go to news.ycombinator.com. \
   For each story visible in the feed, use selectText with save:true to capture the \
   title and point count. Do not click into any articles. Collect 5 stories this way, \
   scrolling as needed. Return the list."
