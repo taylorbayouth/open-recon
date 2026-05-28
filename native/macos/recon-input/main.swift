@@ -50,6 +50,16 @@ func fail(_ id: String, _ msg: String) {
     writeResponse(["id": id, "ok": false, "error": msg])
 }
 
+// Reject NaN/±Infinity before they reach the geometry math. Swift traps when
+// converting a non-finite Double to Int (e.g. `Int(ceil(NaN))` in humanMove's
+// step count), which would kill this long-lived helper on a single bad command.
+// A bad coordinate can reach us if the caller's page→screen mapping divides by
+// an undefined viewport metric, so guard at the boundary rather than trust it.
+func finite(_ v: Double?) -> Double? {
+    guard let v = v, v.isFinite else { return nil }
+    return v
+}
+
 // ─── Mouse ───────────────────────────────────────────────────────────────────
 
 func currentMousePos() -> CGPoint {
@@ -317,12 +327,12 @@ func handle(_ cmd: [String: Any]) {
         ok(id, ["x": p.x, "y": p.y])
 
     case "move":
-        guard let x = (cmd["x"] as? NSNumber)?.doubleValue,
-              let y = (cmd["y"] as? NSNumber)?.doubleValue else {
-            fail(id, "move requires x and y"); return
+        guard let x = finite((cmd["x"] as? NSNumber)?.doubleValue),
+              let y = finite((cmd["y"] as? NSNumber)?.doubleValue) else {
+            fail(id, "move requires finite x and y"); return
         }
-        let speed = (cmd["speedPxPerSec"] as? NSNumber)?.doubleValue ?? 1400
-        let jitter = (cmd["jitterPx"] as? NSNumber)?.doubleValue ?? 0
+        let speed = finite((cmd["speedPxPerSec"] as? NSNumber)?.doubleValue) ?? 1400
+        let jitter = finite((cmd["jitterPx"] as? NSNumber)?.doubleValue) ?? 0
         humanMove(to: CGPoint(x: x, y: y), speedPxPerSec: speed, jitterPx: jitter)
         ok(id)
 
@@ -368,8 +378,8 @@ func handle(_ cmd: [String: Any]) {
     case "scrollGesture":
         let dx = (cmd["dx"] as? NSNumber)?.int32Value ?? 0
         let dy = (cmd["dy"] as? NSNumber)?.int32Value ?? 0
-        let durationMs = (cmd["durationMs"] as? NSNumber)?.doubleValue ?? 400
-        let jitterPx = (cmd["jitterPx"] as? NSNumber)?.doubleValue ?? 3
+        let durationMs = finite((cmd["durationMs"] as? NSNumber)?.doubleValue) ?? 400
+        let jitterPx = finite((cmd["jitterPx"] as? NSNumber)?.doubleValue) ?? 3
         postScrollGesture(dx: dx, dy: dy, durationMs: durationMs, jitterPx: jitterPx)
         ok(id)
 

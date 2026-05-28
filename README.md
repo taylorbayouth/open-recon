@@ -223,7 +223,6 @@ native/macos/recon-input/
   main.swift       — CGEvent mouse/keyboard helper
   build.sh
 
-<<<<<<< HEAD
 tools/                         — dev diagnostics (not part of the pipeline)
   debug-overlay.js             — paint extractor bboxes onto the live page
   probe-pos.js                 — live cursor position vs computed screen point
@@ -231,15 +230,10 @@ tools/                         — dev diagnostics (not part of the pipeline)
 
 test/                          — unit + integration tests
 DESIGN.md                      — full architecture and contracts
-=======
-test/
-DESIGN.md          — full architecture and contracts
->>>>>>> 84603b6 (Rewrite README: lead with value props and quick demo)
 ```
 
 ---
 
-<<<<<<< HEAD
 ## Security & trust model
 
 Open Recon drives a real browser from an LLM, so it sits at the intersection of
@@ -284,8 +278,7 @@ See `DESIGN.md` § Build sequence for the planned next slices.
 
 ---
 
-=======
->>>>>>> 84603b6 (Rewrite README: lead with value props and quick demo)
+
 ## License
 
 MIT

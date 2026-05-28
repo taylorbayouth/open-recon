@@ -28,8 +28,12 @@
     "llm",
     "agent"
   ],
-  "author": "",
+  "author": "Taylor Bayouth",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/taylorbayouth/open-recon.git"
+  },
   "type": "commonjs",
   "dependencies": {
     "chrome-remote-interface": "^0.34.0",
