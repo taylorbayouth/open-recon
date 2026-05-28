@@ -44,7 +44,7 @@
   "vision": {
     "provider": "openai",
     "model": "gpt-5.4-mini",
-    "prompt": "Describe what you see in as much detail as possible.",
+    "prompt": "Describe what you see in detail. Aim for 1500-2000 characters.",
     "maxTokens": 1024
   },
 

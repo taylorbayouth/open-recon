@@ -236,7 +236,7 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
   "vision": {                        // secondary model for the `screenshot` verb
     "provider": "openai",            // independent of the planner provider above
     "model": null,                  // null → a multimodal default for the provider
-    "prompt": "Describe what you see in as much detail as possible."
+    "prompt": "Describe what you see in detail. Aim for 1500-2000 characters."
   }
 }
 ```
