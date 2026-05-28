@@ -28,7 +28,6 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.99.0",
     "chrome-remote-interface": "^0.34.0",
     "dotenv": "^17.4.2"
   }
