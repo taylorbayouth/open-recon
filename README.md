@@ -129,10 +129,25 @@ Done. 23 elements in 373ms
 ### As an agent
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
-node agent.js "search for hello world"                   # cdp backend (default)
+export OPENAI_API_KEY=sk-...
+node agent.js "search for hello world"                   # openai + cdp (defaults)
 node agent.js --executor os "post 'hello' on twitter"    # os backend
+node agent.js --provider anthropic "..."                 # different LLM
 ```
+
+---
+
+## LLM providers
+
+The `Plan` stage is provider-agnostic. Three are built in; pick per-run with `--provider` or the `OPEN_RECON_PROVIDER` env var.
+
+| Provider | Default model | Credentials | Notes |
+|---|---|---|---|
+| `openai` (default) | `gpt-5.4-mini` | `OPENAI_API_KEY` | Native `fetch`, no SDK. Set `OPENAI_BASE_URL` to target a compatible gateway. |
+| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | Uses `@anthropic-ai/sdk`. |
+| `ollama` | `llama3.1` | none | Local server (`OLLAMA_HOST`, default `http://localhost:11434`). Needs a tool-capable model pulled locally. |
+
+All three translate the engine's generic message/tool shape into their native format and return the same `Completion` artifact, so the agent loop never changes. Anthropic and Ollama force `temperature: 0`; OpenAI omits the field because the default mini model rejects a non-default temperature.
 
 ---
 
@@ -364,7 +379,9 @@ lib/
     cdp.js                     — CDP-based input (dev/CI)
     os.js                      — OS-level input via recon-input (stealth)
   providers/
-    anthropic.js               — Anthropic adapter (more providers planned)
+    openai.js                  — OpenAI adapter (default; native fetch)
+    anthropic.js               — Anthropic adapter (SDK)
+    ollama.js                  — Ollama adapter (local; native fetch)
 
 native/macos/recon-input/
   main.swift                   — Swift helper: CGEvent mouse/keyboard

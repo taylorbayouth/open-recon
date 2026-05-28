@@ -387,6 +387,18 @@ module.exports = {
 
 `plan.js` is a thin facade that picks a provider by name and forwards the call. It does no translation — that's the provider's job.
 
+### Selection & defaults
+
+Provider is resolved in this order: the `provider` arg to `plan()` / `run()` → `OPEN_RECON_PROVIDER` env → `DEFAULT_PROVIDER` (`'openai'`). Mirrors the executor selection pattern.
+
+| Provider | Module | Default model | Credentials | Temperature |
+|---|---|---|---|---|
+| `openai` (default) | `providers/openai.js` | `gpt-5.4-mini` | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL` override) | omitted — the mini model rejects non-default temperature |
+| `anthropic` | `providers/anthropic.js` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | forced `0` |
+| `ollama` | `providers/ollama.js` | `llama3.1` | none (local server; `OLLAMA_HOST` override) | forced `0` |
+
+`openai` and `ollama` are implemented with native `fetch` (no SDK). `anthropic` uses `@anthropic-ai/sdk`. All three speak the same generic `{ system, tools, messages }` request and return the same `Completion` artifact, so the loop is provider-agnostic.
+
 ### Tool definitions
 
 Generated once per Run from `actions.js`:

@@ -7,16 +7,19 @@ require('dotenv').config();
 // against the current tab, prints the Run artifact as JSON.
 //
 // Usage:
-//   ANTHROPIC_API_KEY=... node agent.js "search for hello world"
-//   ANTHROPIC_API_KEY=... node agent.js --task "..." --max-steps 10 --verbose
+//   OPENAI_API_KEY=...    node agent.js "search for hello world"
+//   ANTHROPIC_API_KEY=... node agent.js --provider anthropic "..."
+//   node agent.js --provider ollama --model llama3.1 "..."
 //
 // Prerequisites:
 //   - Chrome running with --remote-debugging-port=9222 (run `npm run launch`)
 //   - Navigate Chrome to whatever page the task expects
-//   - ANTHROPIC_API_KEY set in env
+//   - API key for the chosen provider (openai → OPENAI_API_KEY, anthropic →
+//     ANTHROPIC_API_KEY; ollama needs none, just a running local server)
 
 const { connect } = require('./lib/connect');
 const { run } = require('./lib/loop');
+const { DEFAULT_PROVIDER } = require('./lib/plan');
 
 function parseArgs(argv) {
   const args = {
@@ -24,6 +27,7 @@ function parseArgs(argv) {
     maxSteps: 30,
     verbose: false,
     model: undefined,
+    provider: undefined,
     executor: { backend: undefined, humanize: {} },
   };
   const positional = [];
@@ -32,6 +36,7 @@ function parseArgs(argv) {
     if (a === '--task' || a === '-t') args.task = argv[++i];
     else if (a === '--max-steps') args.maxSteps = parseInt(argv[++i], 10);
     else if (a === '--model') args.model = argv[++i];
+    else if (a === '--provider' || a === '-p') args.provider = argv[++i];
     else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--executor') args.executor.backend = argv[++i];
     else if (a === '--no-humanize') args.executor.humanize.enabled = false;
@@ -54,8 +59,10 @@ function printHelp() {
 
 Options:
   --task, -t <string>          The task for the agent (or pass as positional)
+  --provider, -p <name>        LLM provider: openai | anthropic | ollama.
+                               Default: env OPEN_RECON_PROVIDER or 'openai'.
+  --model <id>                 Override the provider's default model
   --max-steps <n>              Max loop iterations (default: 30)
-  --model <id>                 Override the default model
   --verbose, -v                Log each loop turn to stderr
   --executor <cdp|os>          Input backend. 'os' uses recon-input (macOS).
                                Default: env OPEN_RECON_EXECUTOR or 'cdp'.
@@ -66,8 +73,23 @@ Options:
   --help, -h                   Show this help
 
 Environment:
-  ANTHROPIC_API_KEY       Required.
+  OPENAI_API_KEY          Required for the openai provider (the default).
+  ANTHROPIC_API_KEY       Required for the anthropic provider.
+  OPEN_RECON_PROVIDER     Default LLM provider ('openai', 'anthropic', 'ollama').
   OPEN_RECON_EXECUTOR     Default executor backend ('cdp' or 'os').`);
+}
+
+// Each provider needs different credentials. Validate the one we'll actually
+// use so the failure is a clear message instead of a mid-run API error.
+function checkProviderCredentials(provider) {
+  if (provider === 'openai' && !process.env.OPENAI_API_KEY) {
+    return 'OPENAI_API_KEY is not set (required for --provider openai)';
+  }
+  if (provider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    return 'ANTHROPIC_API_KEY is not set (required for --provider anthropic)';
+  }
+  // ollama needs no key — just a reachable local server, checked at call time.
+  return null;
 }
 
 async function main() {
@@ -77,8 +99,11 @@ async function main() {
     printHelp();
     process.exit(2);
   }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('error: ANTHROPIC_API_KEY is not set');
+
+  const provider = args.provider || process.env.OPEN_RECON_PROVIDER || DEFAULT_PROVIDER;
+  const credError = checkProviderCredentials(provider);
+  if (credError) {
+    console.error(`error: ${credError}`);
     process.exit(2);
   }
 
@@ -88,7 +113,7 @@ async function main() {
     const runArtifact = await run({
       session,
       task: args.task,
-      provider: 'anthropic',
+      provider,
       model: args.model,
       maxSteps: args.maxSteps,
       verbose: args.verbose,
