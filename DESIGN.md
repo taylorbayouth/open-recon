@@ -231,7 +231,7 @@ The LLM marks task completion by emitting `{ verb: "done", args: { result: "…"
 | `cdp` | `lib/executors/cdp.js` | `Input.dispatchMouseEvent` / `Input.insertText` via CDP | CI, headless tests, dev iteration |
 | `os`  | `lib/executors/os.js`  | `CGEventPost` via the `recon-input` Swift helper | Production / stealth runs (macOS) |
 
-Backends are selected per Run via the `executor` option on `loop.run()` (or via the `OPEN_RECON_EXECUTOR` env var). The default is `cdp` to keep tests trivial; production should set `os`.
+Backends are selected per Run via the `executor` option on `loop.run()` (or via the `OPEN_RECON_EXECUTOR` env var). The default is `os`; tests and CI can opt into `cdp` for deterministic synthetic input.
 
 ### Why two backends
 
@@ -315,7 +315,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `loop.maxNoChangePolls` | `10` | Give up waiting after this many polls and let the model act/finish. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
-| `executor.backend` | `cdp` | `cdp` or `os` (also `OPEN_RECON_EXECUTOR`). |
+| `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
 | `log.enabled` | `true` | Write per-run JSONL and latest run artifacts. |
 | `log.dir` | `logs` | Directory for run logs, resolved relative to the current working directory. |

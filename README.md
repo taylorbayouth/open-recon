@@ -51,7 +51,7 @@ The `Execute` stage is pluggable. Choose per-run via config:
 | `cdp`  | CI, headless tests, Linux dev, quick iteration. Zero install, zero permissions. | **Higher.** CDP-synthesized events skip the HID layer, motion is teleported, and timing is uniformly tight. Useful and deterministic, but visibly automation-shaped. |
 | `os` (macOS) | Real-site runs where input fidelity matters. Requires the Swift helper to be built once and Accessibility permission granted. | **Lower.** `CGEventPost` travels the same kernel input pipeline as a real mouse/keyboard. Humanlike Bezier mouse motion, randomized per-keystroke delays, and small per-click jitter produce a more natural interaction trace. |
 
-Default is `cdp` so setup and tests stay simple. Use `--executor os` or `OPEN_RECON_EXECUTOR=os` when you want OS-level input on macOS.
+Default is `os` because real-site runs should use OS-level input. Use `--executor cdp` or `OPEN_RECON_EXECUTOR=cdp` for CI, headless runs, or local debugging where deterministic synthetic input is preferable.
 
 ---
 
@@ -180,7 +180,7 @@ All knobs live in `open-recon.config.json` at the repo root. CLI flags override 
   },
 
   "executor": {
-    "backend": "cdp",             // cdp | os
+    "backend": "os",              // os | cdp
     "binPath": null,
     "humanize": { "enabled": true, "mouseSpeedPxPerSec": 1400, "mouseJitterPx": 2,
                   "keystrokeDelayMsMin": 25, "keystrokeDelayMsMax": 85,
@@ -236,7 +236,7 @@ The agent loop produces a stream of validated `Action`s — `navigate("example.c
 
 **CDP backend:** dispatches via `Input.dispatchMouseEvent`, `Input.insertText`, and `Page.navigate`. Targets the geometric center of the element's bbox in page coordinates. Fast, dependency-free, headless-friendly, and suitable for tests — but synthetic.
 
-**OS backend (macOS):** computes the same bbox-center target, jitters it slightly (±~4px max) so successive clicks don't land on identical pixels, then translates page coordinates → screen coordinates using `Browser.getWindowBounds` + `Page.getLayoutMetrics`. The screen point is handed to `recon-input` (the Swift helper), which moves the actual mouse cursor along a randomized cubic Bezier path and posts `CGEvent` mouse/keyboard events. Typing goes through `keyboardSetUnicodeString` with a randomized per-character delay.
+**OS backend (macOS):** computes the same bbox-center target, jitters it slightly (±~4px max) so successive clicks don't land on identical pixels, then translates page coordinates → screen coordinates using `Browser.getWindowBounds` + `Page.getLayoutMetrics`. The screen point is handed to `recon-input` (the Swift helper), which moves the actual mouse cursor along a randomized cubic Bezier path and posts `CGEvent` mouse/keyboard events. Typing goes through `keyboardSetUnicodeString` with a randomized per-character delay. Navigation also uses OS input: `Cmd+L`, type the URL, then `Return`.
 
 See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/recon-input/main.swift` for the Bezier motion.
 
@@ -266,7 +266,7 @@ Extractor JSON always goes to stdout. Progress logs are only emitted with
 | `--provider <name>`, `-p` | LLM provider: `openai` \| `anthropic` \| `ollama`. |
 | `--model <id>` | Override the provider's default model. |
 | `--poll-ms <n>` | Wait between re-checks while the page is unchanged. |
-| `--executor <cdp\|os>` | Input backend. Default: env `OPEN_RECON_EXECUTOR` or `cdp`. |
+| `--executor <os\|cdp>` | Input backend. Default: env `OPEN_RECON_EXECUTOR` or `os`. |
 | `--verbose`, `-v` | Log each loop turn to stderr. |
 
 All other knobs — `loop.maxSteps`, `loop.shortCircuitOnNoChange`, and the `executor.humanize.*` motion/timing settings — live in `open-recon.config.json` only.

@@ -21,7 +21,7 @@ const { loadConfig, deepMerge, ConfigError } = require('./lib/config');
 const { preflight, PreflightError } = require('./lib/preflight');
 
 const PROVIDERS = new Set(['openai', 'anthropic', 'ollama']);
-const EXECUTORS = new Set(['cdp', 'os']);
+const EXECUTORS = new Set(['os', 'cdp']);
 
 function usageError(message) {
   console.error(`error: ${message}`);
@@ -80,7 +80,7 @@ Options:
   --provider, -p <name>        LLM provider: openai | anthropic | ollama
   --model <id>                 Override the provider's default model
   --poll-ms <n>                Wait between re-checks while the page is unchanged
-  --executor <cdp|os>          Input backend. 'os' uses recon-input (macOS).
+  --executor <os|cdp>          Input backend. Default 'os' uses recon-input (macOS).
   --verbose, -v                Log each loop turn to stderr
   --help, -h                   Show this help
 
@@ -92,7 +92,7 @@ Environment:
   OPENAI_API_KEY          Required for the openai provider (the default).
   ANTHROPIC_API_KEY       Required for the anthropic provider.
   OPEN_RECON_PROVIDER     Override config provider ('openai'|'anthropic'|'ollama').
-  OPEN_RECON_EXECUTOR     Override config executor backend ('cdp'|'os').`);
+  OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').`);
 }
 
 function validateConfig(config) {

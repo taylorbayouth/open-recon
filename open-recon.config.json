@@ -22,7 +22,7 @@
   },
 
   "executor": {
-    "backend": "cdp",
+    "backend": "os",
     "binPath": null,
     "humanize": {
       "enabled": true,

@@ -168,10 +168,11 @@ func humanMove(to target: CGPoint, speedPxPerSec: Double, jitterPx: Double) {
 
 // ─── Keyboard ────────────────────────────────────────────────────────────────
 
-// Named-key → CGKeyCode. Covers the keys an agent realistically presses.
-// Letter/number/punctuation keystrokes go through `type` (insertText path) so
-// we don't need a full ANSI keymap here.
+// Named-key → CGKeyCode. Covers command/navigation keys an agent realistically
+// presses. Most text still goes through `type`; `l` exists for Cmd+L URL-bar
+// navigation without involving CDP Page.navigate.
 let NAMED_KEYS: [String: CGKeyCode] = [
+    "l": 0x25,
     "return": 0x24, "enter": 0x24,
     "tab": 0x30,
     "space": 0x31,
