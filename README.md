@@ -30,8 +30,8 @@ Each stage is a pure function (or async equivalent) with a typed input and outpu
 
 You can use Open Recon in three modes:
 
-1. **As a perception library.** `node index.js --pretty` (or the `extract` API) prints the page snapshot. No LLM, no agent loop. Useful as the eyes for any custom automation.
-2. **As an agent runner.** `node agent.js "<task>"` hands the snapshot to Claude and dispatches the actions it returns, looping until done.
+1. **As a perception library.** `node cli.js --pretty` (or the `extract` API) prints the page snapshot. No LLM, no agent loop. Useful as the eyes for any custom automation.
+2. **As an agent runner.** `node agent.js "<task>"` hands the snapshot to the configured LLM and dispatches the actions it returns, looping until done.
 3. **As an engine.** `require('open-recon')` and wire your own loop, provider, or executor.
 
 ---
@@ -83,12 +83,14 @@ This compiles `native/macos/recon-input/main.swift` into a single binary at `nat
 ```bash
 npm run launch                                # starts Chrome on port 9222
 # navigate Chrome to any page
-node index.js --lean --in-viewport-only --pretty
+npm run extract                               # tree snapshot
+node cli.js --lean --in-viewport-only --pretty # flat snapshot
 ```
 
 ```
-$ node index.js --lean --in-viewport-only --pretty
-Attaching to: Feed | LinkedIn (https://www.linkedin.com/feed/)
+$ node cli.js --lean --in-viewport-only --pretty --verbose
+Connecting to Chrome on port 9222...
+Attached to: Feed | LinkedIn (https://www.linkedin.com/feed/)
 Done. 23 elements in 373ms
 ```
 
@@ -187,7 +189,7 @@ The `Plan` stage is provider-agnostic. Three are built in; pick per-run with `--
 | Provider | Default model | Credentials | Notes |
 |---|---|---|---|
 | `openai` (default) | `gpt-5.4-mini` | `OPENAI_API_KEY` | Native `fetch`, no SDK. Set `OPENAI_BASE_URL` to target a compatible gateway. |
-| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | Uses `@anthropic-ai/sdk`. |
+| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | Native `fetch`, no SDK. Set `ANTHROPIC_BASE_URL` to target a compatible gateway. |
 | `ollama` | `llama3.1` | none | Local server (`OLLAMA_HOST`, default `http://localhost:11434`). Needs a tool-capable model pulled locally. |
 
 All three translate the engine's generic message/tool shape into their native format and return the same `Completion` artifact, so the agent loop never changes. Anthropic and Ollama force `temperature: 0`; OpenAI omits the field because the default mini model rejects a non-default temperature.
@@ -202,7 +204,7 @@ Open Recon connects to Chrome over the [DevTools Protocol](https://chromedevtool
 2. **`DOMSnapshot.captureSnapshot`** — a layout snapshot mapping `backendNodeId` → bounding box and computed CSS, with no JavaScript evaluated in the page.
 3. **`Page.getLayoutMetrics`** — viewport dimensions and scroll position.
 
-It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles, filters to interactive elements and visible text, and emits the result as JSON.
+It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles, filters to interactive elements and text, and emits the result as JSON.
 
 **No scripts are evaluated in the page context.** The entire extraction runs through Chrome's internal DevTools APIs, which are not observable from the page itself.
 
@@ -222,13 +224,19 @@ See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/r
 
 ## CLI
 
-### Extractor (`node index.js`)
+### Extractor (`node cli.js` or `open-recon`)
 
 | Flag | Description |
 |---|---|
+| `--tree` | Emit a hierarchical tree of containers, interactive elements, and text leaves. Uses compact array bboxes. |
 | `--pretty` | Pretty-print JSON output (2-space indent). Default: minified. |
 | `--in-viewport-only` | Only include elements that intersect the current viewport. |
 | `--lean` | Compact output: drops null/empty fields, strips CSS-hidden elements (`visibility:hidden`, `opacity:0`, `pointer-events:none`, `display:none`), and omits `computedStyle`. Ideal for LLM context windows. |
+| `--verbose` | Print connection and completion logs to stderr. |
+| `--launch` | Launch Chrome with remote debugging and exit. |
+
+Extractor JSON always goes to stdout. Progress logs are only emitted with
+`--verbose`, so output can be piped safely.
 
 ### Agent (`node agent.js`)
 
@@ -248,6 +256,8 @@ See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/r
 
 ## Output schema
 
+Flat modes (`full` and `--lean`) return `elements` and `text` arrays:
+
 ```
 {
   schemaVersion: "2.0"
@@ -261,11 +271,35 @@ See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/r
     scrollY: number          — vertical scroll offset
   }
   elements:  Element[]       — interactive elements (see below)
-  text:      TextNode[]      — visible text nodes
+  text:      TextNode[]      — text nodes
   lookup:    { [ref]: number } — maps each `ref` to its CDP backendNodeId
   stats:     Stats
 }
 ```
+
+Tree mode (`--tree`) returns a hierarchy instead:
+
+```
+{
+  schemaVersion: "2.0"
+  url:       string
+  title:     string
+  timestamp: string
+  viewport:  { width, height, scrollX, scrollY }
+  tree:      TreeNode|null
+  lookup:    { [ref]: number }
+  stats: {
+    totalAXNodes:        number
+    interactiveReturned: number
+    textReturned:        number
+    elapsedMs:           number
+  }
+}
+```
+
+Tree mode and lean mode filter CSS-hidden, transparent, pointer-events-none, and
+zero-area interactive elements. Full flat mode keeps those records when Chrome
+exposes them in the accessibility tree and layout snapshot.
 
 ### Reference convention
 
@@ -418,7 +452,7 @@ When multiple tabs are open, Open Recon connects to the **frontmost tab** in the
 ```
 index.js                       — public API (extract, connect, launch)
 cli.js                         — extractor CLI
-agent.js                       — agent loop runner (Anthropic by default)
+agent.js                       — agent loop runner (OpenAI by default)
 launch.js                      — Chrome launcher
 
 lib/
@@ -437,7 +471,7 @@ lib/
     os.js                      — OS-level input via recon-input (stealth)
   providers/
     openai.js                  — OpenAI adapter (default; native fetch)
-    anthropic.js               — Anthropic adapter (SDK)
+    anthropic.js               — Anthropic adapter (native fetch)
     ollama.js                  — Ollama adapter (local; native fetch)
 
 native/macos/recon-input/
@@ -454,7 +488,7 @@ DESIGN.md                      — full architecture and contracts
 
 PRs and issues welcome. Useful starting points:
 
-- Other providers (`openai.js`, `ollama.js`) wired through the existing `plan()` facade.
+- Additional providers wired through the existing `plan()` facade.
 - A `Linux` executor (e.g. via `XTestFakeMotionEvent` / `uinput`) so the stealth path works outside macOS.
 - Better humanize defaults tuned against real detector traces (PRs with reproducible measurements especially welcome).
 
