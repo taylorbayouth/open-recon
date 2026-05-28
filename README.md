@@ -264,6 +264,48 @@ Refs are reassigned on every snapshot, so pair each LLM action with the snapshot
 
 ---
 
+## Driving the browser (OS-level input)
+
+Open Recon's perception layer is observation-only. To actually drive Chrome, the agent loop in `lib/loop.js` dispatches `Action`s through an executor backend. Two are available:
+
+| Backend | When to use | Detectability |
+|---|---|---|
+| `cdp` | Tests, CI, dev iteration, headless | Higher — CDP-synthesized input is fingerprintable even though events carry `isTrusted: true` |
+| `os` (macOS) | Production runs against real sites | Lower — `CGEventPost` events travel the HID pipeline, indistinguishable from real input |
+
+### Building the OS backend (one-time, macOS)
+
+```bash
+bash native/macos/recon-input/build.sh
+```
+
+Builds `native/macos/recon-input/bin/recon-input` from `main.swift`. Requires the Xcode command-line tools (`xcode-select --install`). The binary is git-ignored — per-platform, build locally.
+
+### Granting Accessibility permission
+
+`CGEventPost` requires the calling process to have Accessibility permission. The first time Node spawns `recon-input`, macOS will prompt — or you can pre-grant it: **System Settings → Privacy & Security → Accessibility → enable Terminal (or whatever process runs Node)**.
+
+### Running with the OS backend
+
+```bash
+OPEN_RECON_EXECUTOR=os node agent.js "search for hello world"
+# or:
+node agent.js --executor os "search for hello world"
+```
+
+Humanize knobs are CLI-tunable:
+
+```bash
+node agent.js --executor os \
+  --mouse-speed 1200 --mouse-jitter 3 \
+  --keystroke-delay 40,120 \
+  "post 'hello' on twitter"
+```
+
+Pass `--no-humanize` to disable Bezier motion and per-keystroke delays (fast, but defeats the point of `os`).
+
+---
+
 ## Target selection
 
 When multiple tabs are open, Open Recon connects to the **frontmost tab** in the frontmost Chrome window (detected via AppleScript on macOS). If that fails, it falls back to the first page target returned by CDP.
