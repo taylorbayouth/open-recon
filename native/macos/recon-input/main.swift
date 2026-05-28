@@ -91,29 +91,50 @@ func postMouseButton(_ button: CGMouseButton, down: Bool, at p: CGPoint, clickCo
     ev?.post(tap: .cghidEventTap)
 }
 
-// Humanlike motion: cubic Bezier from current → target with small random
-// control-point offsets, jittered per-step. Duration is derived from distance
-// and `speedPxPerSec`, with a 60Hz tick.
+// Humanlike mouse motion. A teleport — `CGEvent(... mouseMoved ...)` posted
+// once at the target — is the canonical bot tell. Instead we:
+//
+//   1. Build a cubic Bezier from current → target with two control points
+//      offset perpendicular to the straight-line path. Magnitude of the
+//      offset is ~10% of total distance, with a random sign so half the
+//      moves curve "left" of the straight line and half "right". This gives
+//      the path subtle arc-shape variation across clicks.
+//   2. Sample the curve in 60Hz steps for `dist / speedPxPerSec` seconds.
+//      Slow elements (1400 px/s default) take ~250ms to cross 350px — well
+//      inside the human range.
+//   3. Apply ease-in-out timing so the cursor accelerates from rest and
+//      decelerates into the target instead of moving at constant velocity.
+//   4. Add per-frame uniform jitter (`jitterPx`) so consecutive samples
+//      don't sit exactly on the curve.
+//
+// All four ingredients are visible in the trace if a detector logs mouse
+// events — leaving any of them off would fingerprint the agent.
 func humanMove(to target: CGPoint, speedPxPerSec: Double, jitterPx: Double) {
     let start = currentMousePos()
     let dx = target.x - start.x
     let dy = target.y - start.y
     let dist = sqrt(dx*dx + dy*dy)
     if dist < 0.5 {
+        // Already there. Single move keeps the cursor's reported position
+        // exact (and avoids dividing by zero below).
         postMouseMove(to: target)
         return
     }
 
-    let speed = max(speedPxPerSec, 50)
+    let speed = max(speedPxPerSec, 50)  // floor prevents accidental hangs
     let durationMs = (dist / speed) * 1000.0
-    let frameMs: Double = 16.0
+    let frameMs: Double = 16.0           // ~60Hz, matches a typical display
     let steps = max(2, Int(ceil(durationMs / frameMs)))
 
-    // Two control points offset perpendicular to the direct path, with a
-    // small random magnitude (~10% of distance). Keeps the curve subtle.
+    // Perpendicular unit vector to the direct path. `(nx, ny) = (-dy, dx)/dist`
+    // rotates the direction vector 90° — moving the control points along this
+    // axis bows the curve sideways without affecting start/end.
     let nx = -dy / dist
     let ny = dx / dist
     let sway = dist * 0.10 * Double.random(in: -1...1)
+    // Cubic Bezier control points at the 1/3 and 2/3 distance marks. The
+    // second point's sway is halved so the curve relaxes back toward the
+    // target — gives a "reach" shape rather than a symmetric arc.
     let c1 = CGPoint(x: start.x + dx * 0.33 + nx * sway,
                      y: start.y + dy * 0.33 + ny * sway)
     let c2 = CGPoint(x: start.x + dx * 0.66 + nx * sway * 0.5,
@@ -121,8 +142,9 @@ func humanMove(to target: CGPoint, speedPxPerSec: Double, jitterPx: Double) {
 
     for i in 1...steps {
         let t = Double(i) / Double(steps)
-        // Ease-in-out so we don't snap to top speed instantly
+        // Quadratic ease-in-out: te(0)=0, te(0.5)=0.5, te(1)=1, te'(0)=te'(1)=0.
         let te = t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t
+        // Cubic Bezier: B(t) = (1-t)³·P₀ + 3(1-t)²·t·P₁ + 3(1-t)·t²·P₂ + t³·P₃
         let u = 1 - te
         let bx = u*u*u*start.x + 3*u*u*te*c1.x + 3*u*te*te*c2.x + te*te*te*target.x
         let by = u*u*u*start.y + 3*u*u*te*c1.y + 3*u*te*te*c2.y + te*te*te*target.y
@@ -131,6 +153,8 @@ func humanMove(to target: CGPoint, speedPxPerSec: Double, jitterPx: Double) {
         postMouseMove(to: CGPoint(x: bx + jx, y: by + jy))
         usleep(useconds_t(frameMs * 1000))
     }
+    // Final exact-target move so the cursor lands precisely where the
+    // caller asked, regardless of accumulated rounding.
     postMouseMove(to: target)
 }
 
@@ -182,8 +206,12 @@ func postKey(_ keyName: String, modifiers: [String]) -> String? {
     return nil
 }
 
-// Type Unicode text via keyboardSetUnicodeString — drives the same input
-// pipeline as IME composition. Works for any character without a keymap.
+// Type Unicode text. We don't translate characters to keycodes (would require
+// a full per-layout keymap and break for non-US keyboards). Instead each
+// character is sent as a synthetic key event whose payload is the literal
+// UTF-16 string — the same path Apple's IMEs use to commit composed text.
+// AppKit text views and Chrome's renderer both accept it as a "typed"
+// character with timing indistinguishable from a real keystroke.
 func typeText(_ text: String, delayMsMin: Int, delayMsMax: Int) {
     for ch in text {
         let s = String(ch)

@@ -1,8 +1,90 @@
 # Open Recon
 
-Extracts every interactive element and visible text node from a live Chrome tab — with bounding boxes and computed styles — and returns it as structured JSON.
+**A stealth browser-control engine for LLM agents.**
 
-Designed as a **perception layer for browser agents**: give an LLM a clean, semantic snapshot of what's on screen and where, without injecting scripts into the page or leaving any detectable footprint.
+Open Recon connects to a real Chrome tab, extracts what's on screen as structured JSON, hands it to an LLM, and dispatches the LLM's actions back to Chrome — optionally driving the actual macOS mouse cursor and keyboard so the page sees real OS-level input.
+
+Two design choices set it apart from typical browser-automation stacks:
+
+- **Perception with zero in-page footprint.** Element extraction uses Chrome's internal DevTools APIs (`Accessibility.getFullAXTree`, `DOMSnapshot.captureSnapshot`) — no scripts are injected into the page, no DOM is mutated. The page cannot observe that it's being inspected.
+- **Action via real input events.** A small Swift helper (`recon-input`) posts `CGEvent`s to the macOS HID pipeline, so in-page JavaScript sees `isTrusted: true` events with humanlike Bezier motion and randomized keystroke timing. The same kernel path a real mouse and keyboard travel.
+
+Together: no script-injection fingerprint going in, no synthetic-input fingerprint going out.
+
+> **Status: early.** The pipeline runs end-to-end (`agent.js` is a working smoke test against a live tab), but this is week-one code. Expect rough edges around iframes, multi-monitor setups, and pages with aggressive layout shifts. Issues and PRs welcome.
+
+---
+
+## Architecture
+
+```
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+│ Connect  │──▶│ Extract  │──▶│  Reduce  │──▶│   Plan   │──▶│ Validate │──▶│ Execute  │
+│  (CDP)   │   │ (recon)  │   │ (prompt) │   │  (LLM)   │   │ (refs)   │   │ (cdp|os) │
+└──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
+                    ▲                                                            │
+                    └────────── settle() + Observe (re-snapshot) ────────────────┘
+```
+
+Each stage is a pure function (or async equivalent) with a typed input and output. See [`DESIGN.md`](DESIGN.md) for the full contract.
+
+You can use Open Recon in three modes:
+
+1. **As a perception library.** `node index.js --pretty` (or the `extract` API) prints the page snapshot. No LLM, no agent loop. Useful as the eyes for any custom automation.
+2. **As an agent runner.** `node agent.js "<task>"` hands the snapshot to Claude and dispatches the actions it returns, looping until done.
+3. **As an engine.** `require('open-recon')` and wire your own loop, provider, or executor.
+
+---
+
+## Two execution backends
+
+The `Execute` stage is pluggable. Choose per-run via config:
+
+| Backend | When to use | Detectability |
+|---|---|---|
+| `cdp`  | CI, headless tests, Linux dev, quick iteration. Zero install, zero permissions. | **Higher.** CDP-synthesized events skip the HID layer, motion is teleported, timing is uniformly tight — modern bot-detection vendors (Akamai, DataDome, Kasada, Cloudflare Bot Management) fingerprint this even though `event.isTrusted === true`. |
+| `os` (macOS) | Production runs against real sites. Requires the Swift helper to be built once and Accessibility permission granted. | **Lower.** `CGEventPost` travels the same kernel input pipeline as a real mouse/keyboard. Humanlike Bezier mouse motion, randomized per-keystroke delays, and small per-click jitter mean the input trace looks like a human's. |
+
+Default is `cdp` so tests stay trivial. Production should set `--executor os` or `OPEN_RECON_EXECUTOR=os`.
+
+---
+
+## Requirements
+
+- **Node.js** ≥ 18
+- **Google Chrome** (stable channel)
+- **macOS** — required for the `os` executor and active-tab detection. The `cdp` executor and the extractor itself run on Linux too.
+- **Xcode command-line tools** (`xcode-select --install`) — only if you build the `os` executor.
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/taylorbayouth/open-recon.git
+cd open-recon
+npm install
+```
+
+For the `os` executor, also:
+
+```bash
+bash native/macos/recon-input/build.sh
+```
+
+This compiles `native/macos/recon-input/main.swift` into a single binary at `native/macos/recon-input/bin/recon-input`. The binary is git-ignored — per-platform, build locally.
+
+---
+
+## Quickstart
+
+### As a perception library
+
+```bash
+npm run launch                                # starts Chrome on port 9222
+# navigate Chrome to any page
+node index.js --lean --in-viewport-only --pretty
+```
 
 ```
 $ node index.js --lean --in-viewport-only --pretty
@@ -36,106 +118,73 @@ Done. 23 elements in 373ms
       "level": 1
     }
   ],
-  "lookup": {
-    "@e1": 1276,
-    "@t1": 1419
-  },
+  "lookup": { "@e1": 1276, "@t1": 1419 },
   "stats": {
-    "totalAXNodes": 2443,
-    "interactiveFound": 208,
-    "textFound": 293,
-    "withBounds": 208,
-    "inViewport": 23,
-    "returned": 23,
-    "elapsedMs": 373
+    "totalAXNodes": 2443, "interactiveFound": 208, "textFound": 293,
+    "withBounds": 208, "inViewport": 23, "returned": 23, "elapsedMs": 373
   }
 }
 ```
 
+### As an agent
+
+```bash
+export ANTHROPIC_API_KEY=sk-...
+node agent.js "search for hello world"                   # cdp backend (default)
+node agent.js --executor os "post 'hello' on twitter"    # os backend
+```
+
 ---
 
-## How it works
+## How perception works
 
-Open Recon connects to Chrome via the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) (CDP) on the remote debugging port. It fires three CDP calls in parallel:
+Open Recon connects to Chrome over the [DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) on the remote debugging port and fires three calls in parallel:
 
-1. **`Accessibility.getFullAXTree`** — the browser's own accessibility tree, which gives roles, names, ARIA state, and `backendNodeId` references for every element.
-2. **`DOMSnapshot.captureSnapshot`** — a layout snapshot that maps `backendNodeId` → bounding box and computed CSS values, without evaluating JavaScript in the page.
+1. **`Accessibility.getFullAXTree`** — the browser's own accessibility tree. Provides roles, names, ARIA state, and `backendNodeId` references for every element.
+2. **`DOMSnapshot.captureSnapshot`** — a layout snapshot mapping `backendNodeId` → bounding box and computed CSS, with no JavaScript evaluated in the page.
 3. **`Page.getLayoutMetrics`** — viewport dimensions and scroll position.
 
-It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles to each node, filters to interactive elements and visible text, and emits the result as JSON.
+It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles, filters to interactive elements and visible text, and emits the result as JSON.
 
 **No scripts are evaluated in the page context.** The entire extraction runs through Chrome's internal DevTools APIs, which are not observable from the page itself.
 
 ---
 
-## Requirements
+## How action works
 
-- **Node.js** ≥ 18
-- **Google Chrome** (stable channel)
-- macOS (active-tab detection in `launch.js` uses AppleScript; the extractor itself is cross-platform)
+The agent loop produces a stream of `Action`s — `click(@e3)`, `type(@e7, "hello")`, `done`. The Execute stage routes each to the configured backend:
 
----
+**CDP backend:** dispatches via `Input.dispatchMouseEvent` and `Input.insertText`. Targets the geometric center of the element's bbox in page coordinates. Fast, dependency-free, headless-friendly — but synthetic.
 
-## Install
+**OS backend (macOS):** computes the same bbox-center target, jitters it slightly (±~4px max) so successive clicks don't land on identical pixels, then translates page coordinates → screen coordinates using `Browser.getWindowBounds` + `Page.getLayoutMetrics`. The screen point is handed to `recon-input` (the Swift helper), which moves the actual mouse cursor along a randomized cubic Bezier path and posts a `CGEvent` mouse click. Typing goes through `keyboardSetUnicodeString` with a randomized per-character delay.
 
-```bash
-git clone https://github.com/taylorbayouth/open-recon.git
-cd open-recon
-npm install
-```
+See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/recon-input/main.swift` for the Bezier motion.
 
 ---
 
-## Usage
+## CLI
 
-### 1. Launch Chrome with remote debugging
-
-If Chrome isn't already running with the debug port open:
-
-```bash
-npm run launch
-# or: node launch.js
-```
-
-This starts Chrome on port `9222` with a dedicated profile at `~/.chrome-agent` and detaches it. If Chrome is already running on that port, it prints a message and exits.
-
-> You can also start Chrome manually:
-> ```bash
-> "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
->   --remote-debugging-port=9222 \
->   --remote-allow-origins=* \
->   --user-data-dir=$HOME/.chrome-agent
-> ```
-
-### 2. Navigate to any page in Chrome
-
-### 3. Run the extractor
-
-```bash
-node index.js --pretty
-```
-
-Output goes to **stdout**. Logs (`Attaching to:`, `Done.`) go to **stderr**, so you can pipe the JSON safely:
-
-```bash
-node index.js --lean --in-viewport-only > snapshot.json
-```
-
----
-
-## CLI flags
+### Extractor (`node index.js`)
 
 | Flag | Description |
 |---|---|
 | `--pretty` | Pretty-print JSON output (2-space indent). Default: minified. |
 | `--in-viewport-only` | Only include elements that intersect the current viewport. |
-| `--lean` | Compact output mode: drops null/empty fields, strips CSS-hidden elements (visibility:hidden, opacity:0, pointer-events:none, display:none), and omits `computedStyle`. Ideal for LLM context windows. |
+| `--lean` | Compact output: drops null/empty fields, strips CSS-hidden elements (`visibility:hidden`, `opacity:0`, `pointer-events:none`, `display:none`), and omits `computedStyle`. Ideal for LLM context windows. |
 
-Flags can be combined:
+### Agent (`node agent.js`)
 
-```bash
-node index.js --lean --in-viewport-only --pretty
-```
+| Flag | Description |
+|---|---|
+| `--task <string>`, positional | The task for the agent (required). |
+| `--max-steps <n>` | Max loop iterations (default: 30). |
+| `--model <id>` | Override the default model. |
+| `--verbose`, `-v` | Log each loop turn to stderr. |
+| `--executor <cdp\|os>` | Input backend. Default: env `OPEN_RECON_EXECUTOR` or `cdp`. |
+| `--no-humanize` | Disable Bezier motion / keystroke delays (`os` only). |
+| `--mouse-speed <px/s>` | Cursor travel speed. Default: 1400. |
+| `--mouse-jitter <px>` | Max ± per-frame deviation from the Bezier path. Default: 2. |
+| `--keystroke-delay <lo[,hi]>` | Per-character delay range, ms. Default: 25,85. |
 
 ---
 
@@ -172,7 +221,7 @@ Regex: `/^@[et]\d+$/`.
 
 Refs are **scoped to a single snapshot**. A new extraction reassigns everything — never cache a ref across snapshots, and never act on a ref from an earlier brief. After any action that may have changed the page (click, navigation, scroll, keypress), re-snapshot before deciding what to do next. The `lookup` table maps each ref to a live CDP `backendNodeId` for the current session; executors should treat refs as opaque strings and resolve via `lookup`.
 
-**Action targets:** `@e` refs are the only valid targets for action verbs (click, focus, type, …). `@t` refs are grounding context — the LLM may reference them in prose ("the heading @t3 says X") but should not emit `click(@t3)`. The validator should reject `@t` refs in target-bearing actions. If a future verb addresses text directly (e.g., `extract(@t3)`), it can be added explicitly without breaking this default.
+**Action targets:** `@e` refs are the only valid targets for action verbs (click, focus, type, …). `@t` refs are grounding context — the LLM may reference them in prose ("the heading @t3 says X") but should not emit `click(@t3)`. The validator rejects `@t` refs in target-bearing actions.
 
 ### Element
 
@@ -228,17 +277,13 @@ Refs are **scoped to a single snapshot**. A new extraction reassigns everything 
 }
 ```
 
----
-
-## Interactive elements captured
-
-Elements are included if their ARIA role is one of:
+### Interactive roles captured
 
 `button` `link` `textbox` `combobox` `checkbox` `radio` `menuitem` `menuitemcheckbox` `menuitemradio` `tab` `searchbox` `slider` `spinbutton` `switch` `treeitem` `option` `columnheader` `rowheader`
 
 **Custom widgets** (e.g. `<div tabindex="0">`) are also included when an element is focusable but has no semantic role (`generic`, `none`, `presentation`).
 
-## Text nodes captured
+### Text roles captured
 
 `heading` `paragraph` `StaticText` `label` `caption` `listitem` `term` `definition` `blockquote` `code`
 
@@ -246,9 +291,9 @@ Sub-runs (`InlineTextBox`, `LineBreak`) are intentionally excluded — they're f
 
 ---
 
-## Using with an LLM
+## Using the brief with your own LLM
 
-Pass the snapshot to any LLM that can read JSON. In `--lean --in-viewport-only` mode, a typical page compresses to a few thousand tokens — small enough to fit alongside system prompts and tool definitions.
+In `--lean --in-viewport-only` mode, a typical page compresses to a few thousand tokens — small enough to fit alongside system prompts and tool definitions.
 
 Each element and text node carries a short `ref` string (`@e1`, `@t1`, …) that the LLM can reference in actions. The snapshot's `lookup` table resolves each ref to a CDP `backendNodeId` for the same session:
 
@@ -260,55 +305,86 @@ await DOM.focus({ nodeId });
 // or use Input.dispatchMouseEvent with the element's bbox coordinates
 ```
 
-Refs are reassigned on every snapshot, so pair each LLM action with the snapshot it was derived from. Executors should treat refs as opaque strings — validate against `/^@[et]\d+$/` and look them up rather than parsing.
+Refs are reassigned on every snapshot, so pair each LLM action with the snapshot it was derived from. Treat refs as opaque strings — validate against `/^@[et]\d+$/` and look them up rather than parsing.
 
 ---
 
-## Driving the browser (OS-level input)
+## Launching Chrome
 
-Open Recon's perception layer is observation-only. To actually drive Chrome, the agent loop in `lib/loop.js` dispatches `Action`s through an executor backend. Two are available:
-
-| Backend | When to use | Detectability |
-|---|---|---|
-| `cdp` | Tests, CI, dev iteration, headless | Higher — CDP-synthesized input is fingerprintable even though events carry `isTrusted: true` |
-| `os` (macOS) | Production runs against real sites | Lower — `CGEventPost` events travel the HID pipeline, indistinguishable from real input |
-
-### Building the OS backend (one-time, macOS)
+If Chrome isn't already running with the debug port open:
 
 ```bash
-bash native/macos/recon-input/build.sh
+npm run launch
+# or: node launch.js
 ```
 
-Builds `native/macos/recon-input/bin/recon-input` from `main.swift`. Requires the Xcode command-line tools (`xcode-select --install`). The binary is git-ignored — per-platform, build locally.
+This starts Chrome on port `9222` with a dedicated profile at `~/.chrome-agent` and detaches it. If Chrome is already running on that port, it prints a message and exits.
 
-### Granting Accessibility permission
-
-`CGEventPost` requires the calling process to have Accessibility permission. The first time Node spawns `recon-input`, macOS will prompt — or you can pre-grant it: **System Settings → Privacy & Security → Accessibility → enable Terminal (or whatever process runs Node)**.
-
-### Running with the OS backend
+You can also start Chrome manually:
 
 ```bash
-OPEN_RECON_EXECUTOR=os node agent.js "search for hello world"
-# or:
-node agent.js --executor os "search for hello world"
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --remote-allow-origins=* \
+  --user-data-dir=$HOME/.chrome-agent
 ```
 
-Humanize knobs are CLI-tunable:
+> The launcher sets `--disable-blink-features=AutomationControlled` so `navigator.webdriver` is not advertised. The dedicated profile is fingerprintable as a fresh user (no history, no cookies) — for maximum blending, point `--user-data-dir` at your real Chrome profile after closing Chrome.
 
-```bash
-node agent.js --executor os \
-  --mouse-speed 1200 --mouse-jitter 3 \
-  --keystroke-delay 40,120 \
-  "post 'hello' on twitter"
-```
+### Granting Accessibility permission (os executor only)
 
-Pass `--no-humanize` to disable Bezier motion and per-keystroke delays (fast, but defeats the point of `os`).
+`CGEventPost` requires the calling process to have Accessibility permission. The first time Node spawns `recon-input`, macOS will prompt — or pre-grant it: **System Settings → Privacy & Security → Accessibility → enable Terminal (or whatever process runs Node)**.
 
----
-
-## Target selection
+### Target selection
 
 When multiple tabs are open, Open Recon connects to the **frontmost tab** in the frontmost Chrome window (detected via AppleScript on macOS). If that fails, it falls back to the first page target returned by CDP.
+
+---
+
+## Project layout
+
+```
+index.js                       — public API (extract, connect, launch)
+cli.js                         — extractor CLI
+agent.js                       — agent loop runner (Anthropic by default)
+launch.js                      — Chrome launcher
+
+lib/
+  extract.js                   — perception: AX tree + layout → Brief
+  connect.js                   — CDP session + settle()
+  launch.js                    — find/spawn Chrome with debug port
+  reduce.js                    — Brief → LLMView (compact text listing)
+  plan.js                      — provider-agnostic LLM facade
+  validate.js                  — ref / verb / arg validation
+  execute.js                   — backend dispatcher
+  loop.js                      — agent orchestrator
+  actions.js                   — verb registry (single source of truth)
+  prompt.js                    — system prompt builder
+  executors/
+    cdp.js                     — CDP-based input (dev/CI)
+    os.js                      — OS-level input via recon-input (stealth)
+  providers/
+    anthropic.js               — Anthropic adapter (more providers planned)
+
+native/macos/recon-input/
+  main.swift                   — Swift helper: CGEvent mouse/keyboard
+  build.sh                     — one-shot swiftc build
+
+test/                          — unit + integration tests
+DESIGN.md                      — full architecture and contracts
+```
+
+---
+
+## Contributing
+
+PRs and issues welcome. Useful starting points:
+
+- Other providers (`openai.js`, `ollama.js`) wired through the existing `plan()` facade.
+- A `Linux` executor (e.g. via `XTestFakeMotionEvent` / `uinput`) so the stealth path works outside macOS.
+- Better humanize defaults tuned against real detector traces (PRs with reproducible measurements especially welcome).
+
+See `DESIGN.md` § Build sequence for the planned next slices.
 
 ---
 
