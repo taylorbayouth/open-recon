@@ -6,6 +6,9 @@ out.json
 # Per-run agent logs
 logs/
 
+# Per-run scratchpad output — may contain scraped page content; never commit it
+runs/
+
 # Secrets — provider API keys live here
 .env
 .env.*

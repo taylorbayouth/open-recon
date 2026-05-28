@@ -19,6 +19,8 @@ const { run } = require('../lib/loop');
 const { loadConfig, ConfigError } = require('../lib/config');
 const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
+const shared = require('../lib/providers/_shared');
+const { normalizeUrl } = require('../lib/executors/page');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -612,6 +614,156 @@ async function memorySuite() {
   });
 }
 
+// Provider wire-format translation lives in _shared.js and feeds all three
+// providers. A regression here silently breaks a whole provider, and the loop
+// tests use a fake provider that never exercises it — so test it directly.
+async function providerTranslationSuite() {
+  console.log('\nprovider translation (_shared):');
+  const { buildJsonSchema, hoistRef, openaiStyleMessages, parseOpenAIStyleToolCalls } = shared;
+
+  await test('buildJsonSchema marks optional (?) fields not-required', () => {
+    const s = buildJsonSchema({ text: 'string', amount: 'number?' });
+    assert.deepStrictEqual(s.required, ['text']);
+    assert.strictEqual(s.properties.amount.type, 'number');
+  });
+
+  await test('hoistRef splits ref from the rest of the args', () => {
+    assert.deepStrictEqual(hoistRef({ ref: '@e1', text: 'hi' }), { ref: '@e1', args: { text: 'hi' } });
+    assert.deepStrictEqual(hoistRef({ direction: 'down' }), { ref: undefined, args: { direction: 'down' } });
+  });
+
+  await test('openaiStyleMessages: system hoisted, string content passthrough', () => {
+    const out = openaiStyleMessages('SYS', [{ role: 'user', content: 'hello' }], { argsAsString: true });
+    assert.deepStrictEqual(out, [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'hello' }]);
+  });
+
+  await test('openaiStyleMessages: assistant tool_use → tool_calls (args stringified)', () => {
+    const msgs = [{ role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'click', input: { ref: '@e1' } }] }];
+    const out = openaiStyleMessages(null, msgs, { argsAsString: true });
+    assert.strictEqual(out[0].content, null, 'OpenAI wants null content alongside tool_calls');
+    assert.strictEqual(out[0].tool_calls[0].function.name, 'click');
+    assert.strictEqual(out[0].tool_calls[0].function.arguments, JSON.stringify({ ref: '@e1' }));
+  });
+
+  await test('openaiStyleMessages: tool_result → standalone role:tool message', () => {
+    const msgs = [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok' }] }];
+    const out = openaiStyleMessages(null, msgs, { argsAsString: true });
+    assert.strictEqual(out[0].role, 'tool');
+    assert.strictEqual(out[0].tool_call_id, 'tu1');
+    assert.strictEqual(out[0].content, 'ok');
+  });
+
+  await test('parseOpenAIStyleToolCalls: JSON-string args → Action with hoisted ref', () => {
+    const calls = [{ id: 'c1', function: { name: 'type', arguments: JSON.stringify({ ref: '@e2', text: 'hi' }) } }];
+    const [a] = parseOpenAIStyleToolCalls(calls, { argsAsString: true });
+    assert.deepStrictEqual(a, { kind: 'action', verb: 'type', args: { text: 'hi' }, ref: '@e2', toolUseId: 'c1' });
+  });
+
+  await test('parseOpenAIStyleToolCalls: object args (ollama) + synthesized id', () => {
+    const calls = [{ function: { name: 'scroll', arguments: { direction: 'down' } } }];
+    const [a] = parseOpenAIStyleToolCalls(calls, { argsAsString: false, synthId: (i) => 'synth' + i });
+    assert.deepStrictEqual(a.args, { direction: 'down' });
+    assert.strictEqual(a.toolUseId, 'synth0');
+  });
+
+  await test('parseOpenAIStyleToolCalls: malformed JSON args default to {}', () => {
+    const calls = [{ id: 'c1', function: { name: 'done', arguments: '{not json' } }];
+    const [a] = parseOpenAIStyleToolCalls(calls, { argsAsString: true });
+    assert.deepStrictEqual(a.args, {});
+  });
+}
+
+async function normalizeUrlSuite() {
+  console.log('\nnormalizeUrl (scheme allowlist):');
+
+  await test('prepends https:// to a bare host', () => {
+    assert.strictEqual(normalizeUrl('example.com'), 'https://example.com/');
+  });
+
+  await test('keeps an explicit http/https url', () => {
+    assert.strictEqual(normalizeUrl('http://example.com/x'), 'http://example.com/x');
+  });
+
+  await test('rejects non-web schemes (file/chrome/about/view-source)', () => {
+    for (const u of ['file:///etc/passwd', 'chrome://settings', 'about:blank', 'view-source:http://x']) {
+      assert.throws(() => normalizeUrl(u), `${u} should be rejected`);
+    }
+  });
+
+  await test('rejects an empty url', () => {
+    assert.throws(() => normalizeUrl('   '), /requires a url/);
+  });
+}
+
+// Exercises the timeout + retry guard in postJSON by swapping global fetch.
+async function postJSONSuite() {
+  console.log('\npostJSON (timeout + retry):');
+  const { postJSON } = shared;
+  const origFetch = global.fetch;
+  const res = (status, payload) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+    headers: { get: () => null },   // no Retry-After
+  });
+
+  await test('returns parsed JSON on success without retrying', async () => {
+    let calls = 0;
+    global.fetch = async () => { calls++; return res(200, { ok: true }); };
+    try {
+      assert.deepStrictEqual(await postJSON('http://x', { body: {}, retries: 2 }), { ok: true });
+      assert.strictEqual(calls, 1);
+    } finally { global.fetch = origFetch; }
+  });
+
+  await test('retries a 503 then succeeds', async () => {
+    let calls = 0;
+    global.fetch = async () => { calls++; return calls < 3 ? res(503, {}) : res(200, { done: true }); };
+    try {
+      assert.deepStrictEqual(await postJSON('http://x', { body: {}, retries: 3 }), { done: true });
+      assert.strictEqual(calls, 3);
+    } finally { global.fetch = origFetch; }
+  });
+
+  await test('fails fast on a 400 (no retry)', async () => {
+    let calls = 0;
+    global.fetch = async () => { calls++; return res(400, { error: 'bad' }); };
+    try {
+      await assert.rejects(() => postJSON('http://x', { body: {}, retries: 3, label: 'Test' }), /Test 400/);
+      assert.strictEqual(calls, 1);
+    } finally { global.fetch = origFetch; }
+  });
+
+  await test('aborts on timeout and surfaces a timeout error', async () => {
+    // Hang until aborted, then reject with the abort reason — like real fetch.
+    global.fetch = (_url, opts) => new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(opts.signal.reason));
+    });
+    try {
+      await assert.rejects(
+        () => postJSON('http://x', { body: {}, retries: 0, timeoutMs: 20, label: 'Test' }),
+        /timed out after 20ms/,
+      );
+    } finally { global.fetch = origFetch; }
+  });
+
+  await test('caller abort is surfaced immediately and not retried', async () => {
+    let calls = 0;
+    const ac = new AbortController();
+    global.fetch = (_url, opts) => new Promise((_, reject) => {
+      calls++;
+      opts.signal.addEventListener('abort', () => reject(opts.signal.reason));
+    });
+    try {
+      const p = postJSON('http://x', { body: {}, retries: 3, signal: ac.signal });
+      ac.abort(new Error('shutdown'));
+      await assert.rejects(() => p, /shutdown/);
+      assert.strictEqual(calls, 1);
+    } finally { global.fetch = origFetch; }
+  });
+}
+
 // ─── main ────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -623,6 +775,9 @@ async function memorySuite() {
   await tokenSuite();
   await loopSuite();
   await memorySuite();
+  await providerTranslationSuite();
+  await normalizeUrlSuite();
+  await postJSONSuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
 })();

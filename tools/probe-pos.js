@@ -13,7 +13,8 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const bin = path.resolve(__dirname, 'native', 'macos', 'recon-input', 'bin', 'recon-input');
+// ../ — this script lives in tools/, the binary in native/ at the repo root.
+const bin = path.resolve(__dirname, '..', 'native', 'macos', 'recon-input', 'bin', 'recon-input');
 const child = spawn(bin, [], { stdio: ['pipe', 'pipe', 'inherit'] });
 
 let buf = '';

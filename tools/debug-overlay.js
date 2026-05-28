@@ -18,7 +18,8 @@ require('dotenv').config();
 //
 // Boxes are drawn in page (document) coordinates, matching brief bbox space.
 
-const { connect } = require('./lib/connect');
+// ../ — this script lives in tools/; the library is at the repo root.
+const { connect } = require('../lib/connect');
 
 const CLEAR = process.argv.includes('--clear');
 
