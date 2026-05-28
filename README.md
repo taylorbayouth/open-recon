@@ -1,17 +1,23 @@
 # Open Recon
 
-**A stealth browser-control engine for LLM agents.**
+**A browser-control engine for LLM agents that separates perception, planning, validation, and real input.**
 
-Open Recon connects to a real Chrome tab, extracts what's on screen as structured JSON, hands it to an LLM, and dispatches the LLM's actions back to Chrome — optionally driving the actual macOS mouse cursor and keyboard so the page sees real OS-level input.
+Open Recon turns any live Chrome tab into a compact, typed control surface for an LLM. It is website-agnostic by design: instead of writing per-site selectors, injecting scripts, or maintaining custom adapters, it reads the same browser-level accessibility and layout data Chrome already computes for the page. That means the core pipeline works across ordinary websites, SaaS apps, dashboards, search pages, forms, feeds, and custom frontends without teaching Open Recon each site's DOM.
+
+It extracts the page through Chrome's internal accessibility and layout snapshots, reduces that into a model-friendly view, validates the model's proposed action against the current snapshot, and dispatches the result back to the browser.
+
+For development and CI, actions can be sent through Chrome DevTools Protocol. For higher-fidelity browser interaction on macOS, Open Recon can drive the actual mouse and keyboard through a small Swift helper, producing OS-level input events with humanlike movement and timing.
 
 Two design choices set it apart from typical browser-automation stacks:
 
-- **Perception with zero in-page footprint.** Element extraction uses Chrome's internal DevTools APIs (`Accessibility.getFullAXTree`, `DOMSnapshot.captureSnapshot`) — no scripts are injected into the page, no DOM is mutated. The page cannot observe that it's being inspected.
-- **Action via real input events.** A small Swift helper (`recon-input`) posts `CGEvent`s to the macOS HID pipeline, so in-page JavaScript sees `isTrusted: true` events with humanlike Bezier motion and randomized keystroke timing. The same kernel path a real mouse and keyboard travel.
+- **Perception with zero in-page footprint.** Element extraction uses Chrome's internal DevTools APIs (`Accessibility.getFullAXTree`, `DOMSnapshot.captureSnapshot`) — no scripts are injected into the page, no DOM is mutated, and extraction does not depend on page-side JavaScript.
+- **Action through a pluggable input layer.** The same validated action stream can run through fast CDP input for tests, or through macOS `CGEvent` input for real cursor and keyboard control. The OS path travels the same input pipeline as physical devices, with configurable Bezier mouse motion, click jitter, and keystroke timing.
 
-Together: no script-injection fingerprint going in, no synthetic-input fingerprint going out.
+Together, those choices make Open Recon more than a scraper and more than a prompt wrapper: it is a small, inspectable control loop for browser agents that need reliable page perception, stable refs, explicit validation, and production-minded input dispatch.
 
-> **Status: early.** The pipeline runs end-to-end (`agent.js` is a working smoke test against a live tab), but this is week-one code. Expect rough edges around iframes, multi-monitor setups, and pages with aggressive layout shifts. Issues and PRs welcome.
+The practical result: you build against the browser, not against a website's implementation details.
+
+> **Status: active development.** The pipeline runs end-to-end against live tabs, with unit and browser-backed integration tests covering extraction, validation, execution, looping, text selection, and ref invariants. Some edge cases are still intentionally scoped down — especially iframes, multi-monitor coordinate mapping, and pages with aggressive layout shifts.
 
 ---
 
@@ -26,13 +32,13 @@ Together: no script-injection fingerprint going in, no synthetic-input fingerpri
                     └────────── settle() + Observe (re-snapshot) ────────────────┘
 ```
 
-Each stage is a pure function (or async equivalent) with a typed input and output. See [`DESIGN.md`](DESIGN.md) for the full contract.
+Open Recon is built as a staged control loop rather than a single monolithic agent. Each stage has a clear artifact boundary: extraction produces a `Brief`, reduction produces an `LLMView`, providers produce `Completion`s, validation accepts or rejects `Action`s, and executors return `Observation`s. That makes runs easier to log, replay, test, and debug. See [`DESIGN.md`](DESIGN.md) for the full contract.
 
 You can use Open Recon in three modes:
 
-1. **As a perception library.** `node cli.js --pretty` (or the `extract` API) prints the page snapshot. No LLM, no agent loop. Useful as the eyes for any custom automation.
-2. **As an agent runner.** `node agent.js "<task>"` hands the snapshot to the configured LLM and dispatches the actions it returns, looping until done.
-3. **As an engine.** `require('open-recon')` and wire your own loop, provider, or executor.
+1. **As a perception library.** `node cli.js --pretty` (or the `extract` API) prints the page snapshot. No LLM, no agent loop. Use it as website-agnostic browser "eyes" for custom automation.
+2. **As an agent runner.** `node agent.js "<task>"` handles preflight, snapshots the current tab, calls the configured model, validates actions, dispatches them, and loops until completion.
+3. **As an engine.** `require('open-recon')` and compose your own provider, policy, memory, executor, or evaluation harness around the same artifacts.
 
 ---
 
@@ -42,10 +48,10 @@ The `Execute` stage is pluggable. Choose per-run via config:
 
 | Backend | When to use | Detectability |
 |---|---|---|
-| `cdp`  | CI, headless tests, Linux dev, quick iteration. Zero install, zero permissions. | **Higher.** CDP-synthesized events skip the HID layer, motion is teleported, timing is uniformly tight — modern bot-detection vendors (Akamai, DataDome, Kasada, Cloudflare Bot Management) fingerprint this even though `event.isTrusted === true`. |
-| `os` (macOS) | Production runs against real sites. Requires the Swift helper to be built once and Accessibility permission granted. | **Lower.** `CGEventPost` travels the same kernel input pipeline as a real mouse/keyboard. Humanlike Bezier mouse motion, randomized per-keystroke delays, and small per-click jitter mean the input trace looks like a human's. |
+| `cdp`  | CI, headless tests, Linux dev, quick iteration. Zero install, zero permissions. | **Higher.** CDP-synthesized events skip the HID layer, motion is teleported, and timing is uniformly tight. Useful and deterministic, but visibly automation-shaped. |
+| `os` (macOS) | Real-site runs where input fidelity matters. Requires the Swift helper to be built once and Accessibility permission granted. | **Lower.** `CGEventPost` travels the same kernel input pipeline as a real mouse/keyboard. Humanlike Bezier mouse motion, randomized per-keystroke delays, and small per-click jitter produce a more natural interaction trace. |
 
-Default is `cdp` so tests stay trivial. Production should set `--executor os` or `OPEN_RECON_EXECUTOR=os`.
+Default is `cdp` so setup and tests stay simple. Use `--executor os` or `OPEN_RECON_EXECUTOR=os` when you want OS-level input on macOS.
 
 ---
 
@@ -78,7 +84,7 @@ This compiles `native/macos/recon-input/main.swift` into a single binary at `nat
 
 ## Quickstart
 
-### As a perception library
+### As a Perception Library
 
 ```bash
 npm run launch                                # starts Chrome on port 9222
@@ -128,9 +134,9 @@ Done. 23 elements in 373ms
 }
 ```
 
-### As an agent
+### As an Agent Runner
 
-One command does everything. It runs preflight — installs deps if missing,
+One command does the setup work before the loop starts. It runs preflight — installs deps if missing,
 builds the `os` driver and checks Accessibility permission when that backend is
 selected, verifies your provider key, and launches Chrome if it isn't already
 running — then runs your task. Re-running is safe; satisfied steps are skipped.
@@ -155,7 +161,7 @@ All knobs live in `open-recon.config.json` at the repo root. CLI flags override 
 ```jsonc
 {
   "provider": "openai",          // openai | anthropic | ollama
-  "model": null,                  // null → provider's own default
+  "model": "gpt-5.4-mini",        // null → provider's own default
 
   "loop": {
     "maxSteps": 30,
@@ -192,7 +198,7 @@ Point `OPEN_RECON_CONFIG` at a different path to use an alternate file.
 
 ### No-change short-circuit
 
-Each turn, the loop hashes the page (content only — `timestamp`, `bbox`, and `stats` are excluded) and compares it to what the model last acted on. If nothing changed, it **doesn't burn an LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes (proceed immediately) or `loop.maxNoChangePolls` is hit (proceed anyway). This is how the agent waits out a slow page load without a fixed timer, and avoids paying for identical turns. Disable by setting `loop.shortCircuitOnNoChange` to `false` in `open-recon.config.json`.
+Each turn, the loop hashes the page content and compares it to the snapshot the model last acted on. Ephemeral fields such as `timestamp`, `bbox`, and `stats` are excluded, so identical page states hash the same. If nothing changed, Open Recon **doesn't burn another LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes or `loop.maxNoChangePolls` is hit. This gives the agent a deterministic wait-for-change behavior without relying on a fixed "sleep and hope" timer. Disable by setting `loop.shortCircuitOnNoChange` to `false` in `open-recon.config.json`.
 
 ---
 
@@ -206,7 +212,7 @@ The `Plan` stage is provider-agnostic. Three are built in; pick per-run with `--
 | `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | Native `fetch`, no SDK. Set `ANTHROPIC_BASE_URL` to target a compatible gateway. |
 | `ollama` | `llama3.1` | none | Local server (`OLLAMA_HOST`, default `http://localhost:11434`). Needs a tool-capable model pulled locally. |
 
-All three translate the engine's generic message/tool shape into their native format and return the same `Completion` artifact, so the agent loop never changes. Anthropic and Ollama force `temperature: 0`; OpenAI omits the field because the default mini model rejects a non-default temperature.
+All three translate the engine's generic message/tool shape into their native format and return the same `Completion` artifact, so the agent loop stays provider-agnostic. Anthropic and Ollama force `temperature: 0`; OpenAI omits the field because the default mini model rejects a non-default temperature.
 
 ---
 
@@ -218,7 +224,7 @@ Open Recon connects to Chrome over the [DevTools Protocol](https://chromedevtool
 2. **`DOMSnapshot.captureSnapshot`** — a layout snapshot mapping `backendNodeId` → bounding box and computed CSS, with no JavaScript evaluated in the page.
 3. **`Page.getLayoutMetrics`** — viewport dimensions and scroll position.
 
-It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles, filters to interactive elements and text, and emits the result as JSON.
+It then correlates the AX tree with the layout snapshot to attach pixel coordinates and styles, filters to interactive elements and text, assigns short snapshot-scoped refs, and emits the result as JSON.
 
 **No scripts are evaluated in the page context.** The entire extraction runs through Chrome's internal DevTools APIs, which are not observable from the page itself.
 
@@ -226,11 +232,11 @@ It then correlates the AX tree with the layout snapshot to attach pixel coordina
 
 ## How action works
 
-The agent loop produces a stream of `Action`s — `click(@e3)`, `type(@e7, "hello")`, `done`. The Execute stage routes each to the configured backend:
+The agent loop produces a stream of validated `Action`s — `navigate("example.com")`, `click(@e3)`, `type(@e7, "hello")`, `selectText(@t2)`, `done`. The Execute stage routes each to the configured backend:
 
-**CDP backend:** dispatches via `Input.dispatchMouseEvent` and `Input.insertText`. Targets the geometric center of the element's bbox in page coordinates. Fast, dependency-free, headless-friendly — but synthetic.
+**CDP backend:** dispatches via `Input.dispatchMouseEvent`, `Input.insertText`, and `Page.navigate`. Targets the geometric center of the element's bbox in page coordinates. Fast, dependency-free, headless-friendly, and suitable for tests — but synthetic.
 
-**OS backend (macOS):** computes the same bbox-center target, jitters it slightly (±~4px max) so successive clicks don't land on identical pixels, then translates page coordinates → screen coordinates using `Browser.getWindowBounds` + `Page.getLayoutMetrics`. The screen point is handed to `recon-input` (the Swift helper), which moves the actual mouse cursor along a randomized cubic Bezier path and posts a `CGEvent` mouse click. Typing goes through `keyboardSetUnicodeString` with a randomized per-character delay.
+**OS backend (macOS):** computes the same bbox-center target, jitters it slightly (±~4px max) so successive clicks don't land on identical pixels, then translates page coordinates → screen coordinates using `Browser.getWindowBounds` + `Page.getLayoutMetrics`. The screen point is handed to `recon-input` (the Swift helper), which moves the actual mouse cursor along a randomized cubic Bezier path and posts `CGEvent` mouse/keyboard events. Typing goes through `keyboardSetUnicodeString` with a randomized per-character delay.
 
 See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/recon-input/main.swift` for the Bezier motion.
 
@@ -326,7 +332,7 @@ Regex: `/^@[et]\d+$/`.
 
 Refs are **scoped to a single snapshot**. A new extraction reassigns everything — never cache a ref across snapshots, and never act on a ref from an earlier brief. After any action that may have changed the page (click, navigation, scroll, keypress), re-snapshot before deciding what to do next. The `lookup` table maps each ref to a live CDP `backendNodeId` for the current session; executors should treat refs as opaque strings and resolve via `lookup`.
 
-**Action targets:** `@e` refs are the only valid targets for action verbs (click, focus, type, …). `@t` refs are grounding context — the LLM may reference them in prose ("the heading @t3 says X") but should not emit `click(@t3)`. The validator rejects `@t` refs in target-bearing actions.
+**Action targets:** most action verbs target `@e` refs only. `@t` refs are grounding context the LLM can cite in reasoning, and a small set of verbs can explicitly target them when appropriate, such as `selectText(@t3)`. The validator enforces each verb's allowed ref types before anything is dispatched.
 
 ### Element
 
@@ -412,7 +418,7 @@ The agent loop renders the brief via `reduce()` into a reading-order listing tha
 [@e4]  button      "Sign in"             (300,350)
 ```
 
-`[@e…]` are action targets; `[@t…]` are read-only context the model can cite but not act on (the validator enforces this). The `(x,y)` suffixes let the model disambiguate repeated controls. Toggle text, coordinates, truncation, and dedupe under the `view` block in `open-recon.config.json`.
+`[@e…]` are action targets for most verbs; `[@t…]` are text context the model can cite, and specific verbs such as `selectText` may target them when the action registry allows it. The validator enforces those ref-type rules. The `(x,y)` suffixes let the model disambiguate repeated controls. Toggle text, coordinates, truncation, and dedupe under the `view` block in `open-recon.config.json`.
 
 Each element and text node carries a short `ref` string (`@e1`, `@t1`, …) that the LLM can reference in actions. The snapshot's `lookup` table resolves each ref to a CDP `backendNodeId` for the same session:
 
@@ -448,7 +454,7 @@ You can also start Chrome manually:
   --user-data-dir=$HOME/.chrome-agent
 ```
 
-> The launcher sets `--disable-blink-features=AutomationControlled` so `navigator.webdriver` is not advertised. The dedicated profile is fingerprintable as a fresh user (no history, no cookies) — for maximum blending, point `--user-data-dir` at your real Chrome profile after closing Chrome.
+> The launcher intentionally avoids `--enable-automation` and does not pass `--disable-blink-features=AutomationControlled`; with a bare remote-debugging port, `navigator.webdriver` is not advertised, and avoiding the extra flag prevents Chrome's unsupported-command-line warning bar from shifting layout. The dedicated profile is still fingerprintable as a fresh user (no history, no cookies) — for maximum blending, point `--user-data-dir` at your real Chrome profile after closing Chrome.
 
 ### Granting Accessibility permission (os executor only)
 
