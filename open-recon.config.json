@@ -3,7 +3,7 @@
   "model": "gpt-5.4-mini",
 
   "loop": {
-    "maxSteps": 30,
+    "maxSteps": 50,
     "shortCircuitOnNoChange": true,
     "pollMs": 1500,
     "maxNoChangePolls": 10,

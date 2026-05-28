@@ -103,6 +103,14 @@ function validateConfig(config) {
   if (!EXECUTORS.has(backend)) {
     usageError(`unknown executor "${backend}" (expected: ${[...EXECUTORS].join(', ')})`);
   }
+  // Numeric loop knobs must be sane. A bad value from the config file or a flag
+  // otherwise fails silently and weirdly: maxSteps <= 0 exits before the first
+  // turn; a negative pollMs makes the no-change wait never elapse.
+  const posInt = (v, name) => {
+    if (!Number.isInteger(v) || v <= 0) usageError(`${name} must be a positive integer, got ${v}`);
+  };
+  posInt(config.loop?.maxSteps, 'loop.maxSteps');
+  posInt(config.loop?.pollMs, 'loop.pollMs');
 }
 
 async function main() {
