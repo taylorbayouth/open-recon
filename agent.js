@@ -28,23 +28,40 @@ function parseArgs(argv) {
   const args = { task: null, verbose: false };
   const override = { loop: {}, executor: { humanize: {} } };
   const positional = [];
+
+  // Parse a numeric flag value, rejecting missing/non-numeric input with a clear
+  // usage error. Without this, parseInt/parseFloat yield NaN, deepMerge keeps it
+  // (it only skips `undefined`), and a NaN maxSteps makes `iter < NaN` always
+  // false — the loop silently runs zero turns.
+  const num = (raw, flag, parse = parseFloat) => {
+    const n = raw === undefined ? NaN : parse(raw, 10);
+    if (!Number.isFinite(n)) {
+      console.error(`error: ${flag} requires a number, got ${raw === undefined ? '(nothing)' : `"${raw}"`}`);
+      process.exit(2);
+    }
+    return n;
+  };
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task' || a === '-t') args.task = argv[++i];
     else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--provider' || a === '-p') override.provider = argv[++i];
     else if (a === '--model') override.model = argv[++i];
-    else if (a === '--max-steps') override.loop.maxSteps = parseInt(argv[++i], 10);
-    else if (a === '--poll-ms') override.loop.pollMs = parseInt(argv[++i], 10);
+    else if (a === '--max-steps') override.loop.maxSteps = num(argv[++i], '--max-steps', parseInt);
+    else if (a === '--poll-ms') override.loop.pollMs = num(argv[++i], '--poll-ms', parseInt);
     else if (a === '--no-short-circuit') override.loop.shortCircuitOnNoChange = false;
     else if (a === '--executor') override.executor.backend = argv[++i];
     else if (a === '--no-humanize') override.executor.humanize.enabled = false;
-    else if (a === '--mouse-speed') override.executor.humanize.mouseSpeedPxPerSec = parseFloat(argv[++i]);
-    else if (a === '--mouse-jitter') override.executor.humanize.mouseJitterPx = parseFloat(argv[++i]);
+    else if (a === '--mouse-speed') override.executor.humanize.mouseSpeedPxPerSec = num(argv[++i], '--mouse-speed');
+    else if (a === '--mouse-jitter') override.executor.humanize.mouseJitterPx = num(argv[++i], '--mouse-jitter');
     else if (a === '--keystroke-delay') {
-      const [lo, hi] = argv[++i].split(',').map(n => parseInt(n, 10));
+      const raw = argv[++i];
+      if (raw === undefined) { console.error('error: --keystroke-delay requires lo[,hi]'); process.exit(2); }
+      const [loStr, hiStr] = raw.split(',');
+      const lo = num(loStr, '--keystroke-delay', parseInt);
       override.executor.humanize.keystrokeDelayMsMin = lo;
-      override.executor.humanize.keystrokeDelayMsMax = Number.isFinite(hi) ? hi : lo;
+      override.executor.humanize.keystrokeDelayMsMax = hiStr === undefined ? lo : num(hiStr, '--keystroke-delay', parseInt);
     }
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else positional.push(a);
