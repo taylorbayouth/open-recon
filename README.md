@@ -48,41 +48,63 @@ No browser visible. No screenshot taken. No DOM sent to the model. Ten steps, un
 git clone https://github.com/taylorbayouth/open-recon.git
 cd open-recon
 npm install
-cp .env.example .env    # add the API key for your provider
 ```
 
-Set the key for whichever provider you'll use (default is `openai`, so `OPENAI_API_KEY`). Only the active provider's key is required; `ollama` needs none.
+That's it. The first time you run `node agent.js`, the preflight will walk you through the rest:
 
-Then set up the OS executor — the Swift driver that posts real macOS input events. Pick one path:
+1. **API key** — prompts for your provider key and saves it to `.env`
+2. **macOS input driver** — offers to download the notarized binary from [GitHub releases](https://github.com/taylorbayouth/open-recon/releases) or build from source
+3. **Accessibility permission** — tells you exactly where to enable it if it's not set
 
-**Option A — download the pre-built binary (recommended)**
+Re-running is safe — each step is a no-op once satisfied.
 
-A notarized, Gatekeeper-safe universal binary (arm64 + x86_64) is attached to each GitHub release as a `.zip` containing a `.dmg`. Download it, mount the image, and copy the binary into place:
+---
+
+### Manual setup (optional)
+
+If you'd rather do it yourself before the first run:
+
+**API key** — copy `.env.example` to `.env` and fill in the key for your provider:
 
 ```bash
-# mount the .dmg, then:
+cp .env.example .env
+# add OPENAI_API_KEY or ANTHROPIC_API_KEY
+```
+
+> **Shell override gotcha:** if you previously ran `export OPENAI_API_KEY=...` in your terminal, that value wins over `.env`. Run `unset OPENAI_API_KEY` if the agent keeps using a stale key.
+
+**macOS input driver** — the Swift helper that posts real OS-level input events. Two options:
+
+*Option A — download the notarized binary (recommended)*
+
+Download `recon-input-*-macos-universal.zip` from the [latest release](https://github.com/taylorbayouth/open-recon/releases/latest), unzip to get the `.dmg`, then:
+
+```bash
+hdiutil attach recon-input-*-macos-universal.dmg
+mkdir -p native/macos/recon-input/bin
 cp /Volumes/recon-input/recon-input native/macos/recon-input/bin/recon-input
+chmod +x native/macos/recon-input/bin/recon-input
+hdiutil detach /Volumes/recon-input
 ```
 
-The binary is signed with a Developer ID certificate, notarized by Apple, and the ticket is stapled into the `.dmg` — so Gatekeeper accepts it on any Mac without a network call.
+The binary is signed with a Developer ID certificate, notarized by Apple, and the ticket is stapled into the `.dmg` — Gatekeeper accepts it on any Mac without a network call.
 
-**Option B — build from source**
+*Option B — build from source*
 
-Requires the Xcode command-line tools (`xcode-select --install`):
+Requires the Xcode command-line tools:
 
 ```bash
+xcode-select --install   # if not already installed
 bash native/macos/recon-input/build.sh
 ```
 
-This compiles `main.swift` into `native/macos/recon-input/bin/recon-input` for your native arch. The resulting binary is not signed or notarized — macOS may quarantine it on first run. If you see a Gatekeeper block, remove the quarantine attribute:
+The resulting binary is unsigned — macOS may quarantine it on first run. If you see a Gatekeeper block:
 
 ```bash
 xattr -d com.apple.quarantine native/macos/recon-input/bin/recon-input
 ```
 
-**After either option — grant Accessibility permission**
-
-The `CGEventPost` API requires the calling process to have Accessibility access. Open **System Settings → Privacy & Security → Accessibility** and enable Terminal (or whichever app runs Node). You only need to do this once.
+**Accessibility permission** — open **System Settings → Privacy & Security → Accessibility** and enable Terminal (or whichever app runs Node). Required once for the OS executor.
 
 ---
 
