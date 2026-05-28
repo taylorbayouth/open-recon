@@ -19,7 +19,7 @@ you@dev open-recon % node agent.js --verbose "Go to news.ycombinator.com. \
   title and point count. Do not click into any articles. Collect 5 stories this way, \
   scrolling as needed. Return the list."
 
-[preflight] Chrome on :9222 ✓  provider: anthropic ✓  executor: os ✓
+[preflight] Chrome on :9222 ✓  provider: openai ✓  executor: os ✓
 [step 1] navigate → news.ycombinator.com
 [step 2] snapshot → 41 elements, 88 text nodes, 312ms
 [step 3] selectText @t3 "Ask HN: What's the best way to learn systems programming?" save:true
@@ -111,7 +111,7 @@ xattr -d com.apple.quarantine native/macos/recon-input/bin/recon-input
 ## Quickstart
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 node agent.js "go to github.com/trending and collect the top 5 repos"
 ```
 
@@ -192,8 +192,8 @@ Switch with `--executor cdp` or `OPEN_RECON_EXECUTOR=cdp`.
 
 | Provider | Default model | Key |
 |---|---|---|
+| `openai` (default) | `gpt-5.4-mini` | `OPENAI_API_KEY` |
 | `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
-| `openai` | `gpt-5.4-mini` | `OPENAI_API_KEY` |
 | `ollama` | `llama3.1` | none (local) |
 
 Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
@@ -205,7 +205,7 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
 ```jsonc
 // open-recon.config.json
 {
-  "provider": "anthropic",
+  "provider": "openai",
   "model": null,                  // null → provider default
 
   "loop": {
@@ -221,6 +221,8 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
 
   "executor": {
     "backend": "os",
+    "pauseOnUserInput": true,        // os: back off while you use the mouse/keyboard
+    "userIdleMs": 600,               // os: resume after you've been idle this long
     "humanize": {
       "enabled": true,
       "mouseSpeedPxPerSec": 1400,
@@ -288,7 +290,7 @@ Open Recon drives a real browser from an LLM, so it sits at the intersection of 
 - **Navigation is restricted to `http`/`https`.** `navigate` rejects `file://`, `chrome://`, `about:`, `view-source:`, and other non-web schemes, so an injected URL can't steer the browser into reading local files or privileged browser pages.
 - **Perception evaluates no page JavaScript.** Extraction uses Chrome's internal DevTools APIs only. The one exception is `selectText`, which reads `window.getSelection()` at action time to report what it highlighted — a confirmation read, not part of perception.
 - **API keys live in `.env`** (git-ignored). Run artifacts and scraped text are written under `runs/` and `logs/`, both git-ignored — but they may contain sensitive page content, so treat them accordingly.
-- **The `os` executor posts real OS input.** It gates every action on Chrome being the frontmost app and aborts otherwise, so input can't land in another window if focus changes mid-run.
+- **The `os` executor posts real OS input.** It gates every action on Chrome being the frontmost app, so input can't land in another window if focus changes mid-run. By default it also pauses while you're actively using the mouse/keyboard and resumes once you've been idle (`executor.pauseOnUserInput` / `userIdleMs`) — so you can share the machine without fighting the agent for the cursor. A dedicated agent machine can leave this on at no cost.
 
 ---
 

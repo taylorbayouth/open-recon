@@ -25,6 +25,8 @@
   "executor": {
     "backend": "os",
     "binPath": null,
+    "pauseOnUserInput": true,
+    "userIdleMs": 600,
     "humanize": {
       "enabled": true,
       "mouseSpeedPxPerSec": 1400,

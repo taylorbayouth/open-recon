@@ -25,6 +25,7 @@
 //   { "id": "<corr>", "op": "ping" }
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
 //   { "id": "<corr>", "op": "frontapp" }                     // frontmost app id
+//   { "id": "<corr>", "op": "idle" }                         // real-user input idle
 //
 // Response shape:
 //   { "id": "<corr>", "ok": true,  "data": { ... } }
@@ -95,6 +96,18 @@ func mouseEventType(_ button: CGMouseButton, down: Bool) -> CGEventType {
 // posted as `.leftMouseDragged` (not `.mouseMoved`) or apps won't extend a text
 // selection / drag — a plain move with the button down is ignored as a gesture.
 var leftButtonDown = false
+
+// Monotonic clock (unaffected by wall-clock adjustments), in seconds.
+func monoNowSecs() -> Double {
+    return Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+}
+
+// Timestamp of the last input event WE injected. The agent posts events to the
+// HID event tap, so they're indistinguishable from real hardware via
+// secondsSinceLastEventType. The `idle` op compares the system's last-event time
+// against this to tell the user's input apart from the agent's own. 0 = never.
+var lastSelfInputMono: Double = 0
+func markSelfInput() { lastSelfInputMono = monoNowSecs() }
 
 func postMouseMove(to p: CGPoint) {
     let type: CGEventType = leftButtonDown ? .leftMouseDragged : .mouseMoved
@@ -334,6 +347,7 @@ func handle(_ cmd: [String: Any]) {
         let speed = finite((cmd["speedPxPerSec"] as? NSNumber)?.doubleValue) ?? 1400
         let jitter = finite((cmd["jitterPx"] as? NSNumber)?.doubleValue) ?? 0
         humanMove(to: CGPoint(x: x, y: y), speedPxPerSec: speed, jitterPx: jitter)
+        markSelfInput()
         ok(id)
 
     case "click":
@@ -342,18 +356,21 @@ func handle(_ cmd: [String: Any]) {
         let p = currentMousePos()
         postMouseButton(b, down: true, at: p)
         postMouseButton(b, down: false, at: p)
+        markSelfInput()
         ok(id)
 
     case "down":
         let b = cgButton((cmd["button"] as? String) ?? "left")
         if b == .left { leftButtonDown = true }
         postMouseButton(b, down: true, at: currentMousePos())
+        markSelfInput()
         ok(id)
 
     case "up":
         let b = cgButton((cmd["button"] as? String) ?? "left")
         postMouseButton(b, down: false, at: currentMousePos())
         if b == .left { leftButtonDown = false }
+        markSelfInput()
         ok(id)
 
     case "type":
@@ -361,18 +378,21 @@ func handle(_ cmd: [String: Any]) {
         let lo = (cmd["delayMsMin"] as? NSNumber)?.intValue ?? 25
         let hi = (cmd["delayMsMax"] as? NSNumber)?.intValue ?? 85
         typeText(text, delayMsMin: lo, delayMsMax: hi)
+        markSelfInput()
         ok(id)
 
     case "key":
         guard let key = cmd["key"] as? String else { fail(id, "key requires key name"); return }
         let mods = (cmd["modifiers"] as? [String]) ?? []
         if let err = postKey(key, modifiers: mods) { fail(id, err); return }
+        markSelfInput()
         ok(id)
 
     case "scroll":
         let dx = (cmd["dx"] as? NSNumber)?.int32Value ?? 0
         let dy = (cmd["dy"] as? NSNumber)?.int32Value ?? 0
         postScroll(dx: dx, dy: dy)
+        markSelfInput()
         ok(id)
 
     case "scrollGesture":
@@ -381,7 +401,41 @@ func handle(_ cmd: [String: Any]) {
         let durationMs = finite((cmd["durationMs"] as? NSNumber)?.doubleValue) ?? 400
         let jitterPx = finite((cmd["jitterPx"] as? NSNumber)?.doubleValue) ?? 3
         postScrollGesture(dx: dx, dy: dy, durationMs: durationMs, jitterPx: jitterPx)
+        markSelfInput()
         ok(id)
+
+    case "idle":
+        // Time since the user last touched the real mouse/keyboard, used by the
+        // executor to pause while the human is actively using the machine. The
+        // agent injects to the HID tap, so its own events also advance the system
+        // counter — we subtract them by comparing against lastSelfInputMono: the
+        // user is "active" only if the most recent system event is newer than our
+        // most recent injection. When it isn't, the user has been quiet since we
+        // last acted, so report a large idle time (safe to proceed).
+        let inputTypes: [CGEventType] = [
+            .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+            .rightMouseDown, .keyDown, .flagsChanged, .scrollWheel,
+        ]
+        var sysIdle = Double.greatestFiniteMagnitude
+        for t in inputTypes {
+            let s = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: t)
+            if s < sysIdle { sysIdle = s }
+        }
+        let selfIdle = lastSelfInputMono == 0 ? Double.greatestFiniteMagnitude
+                                              : monoNowSecs() - lastSelfInputMono
+        // Epsilon absorbs the small lag between our post and the counter update,
+        // so our own events don't read as the user pre-empting us.
+        let userActive = sysIdle + 0.05 < selfIdle
+        // secondsSinceLastEventType returns a huge value (≈ uptime) when no such
+        // event has ever occurred; converting that to Int would trap, so clamp to
+        // a finite cap that still reads as "long idle" on the JS side.
+        let toMs: (Double) -> Int = { s in s.isFinite ? min(Int(min(s, 86_400) * 1000), 86_400_000) : 86_400_000 }
+        ok(id, [
+            "userActive": userActive,
+            "userIdleMs": userActive ? toMs(sysIdle) : 86_400_000,
+            "sysIdleMs": toMs(sysIdle),
+            "selfIdleMs": toMs(selfIdle),
+        ])
 
     default:
         fail(id, "unknown op: \(op)")

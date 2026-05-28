@@ -320,6 +320,8 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
+| `executor.pauseOnUserInput` | `true` | OS backend: pause input while the human uses the mouse/keyboard, auto-resume when idle. |
+| `executor.userIdleMs` | `600` | OS backend: how long the human must be idle before input resumes. |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
 | `log.enabled` | `true` | Write per-run JSONL and latest run artifacts. |
 | `log.dir` | `logs` | Directory for run logs, resolved relative to the current working directory. |
