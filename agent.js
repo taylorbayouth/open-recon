@@ -139,7 +139,7 @@ async function main() {
   try {
     session = await connect({ port: 9222 });
     const runArtifact = await run({ session, task: args.task, config, verbose: args.verbose });
-    process.stdout.write(JSON.stringify(runArtifact, null, 2) + '\n');
+    process.stdout.write((runArtifact.report || JSON.stringify(runArtifact, null, 2)) + '\n');
     process.exitCode = runArtifact.status === 'completed' ? 0 : 1;
   } finally {
     if (session) await session.close();

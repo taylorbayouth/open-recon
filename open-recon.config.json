@@ -32,7 +32,9 @@
       "keystrokeDelayMsMin": 25,
       "keystrokeDelayMsMax": 85,
       "preClickPauseMsMin": 40,
-      "preClickPauseMsMax": 160
+      "preClickPauseMsMax": 160,
+      "scrollDurationMs": 400,
+      "scrollJitterPx": 3
     }
   },
 

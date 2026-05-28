@@ -19,6 +19,8 @@
 //   { "id": "<corr>", "op": "key",    "key": "Return",
 //                     "modifiers": ["cmd","shift"] }
 //   { "id": "<corr>", "op": "scroll", "dx": 0, "dy": -120 }
+//   { "id": "<corr>", "op": "scrollGesture", "dx": 0, "dy": -400,
+//                     "durationMs": 400, "jitterPx": 3 }
 //   { "id": "<corr>", "op": "pos" }                          // returns cursor
 //   { "id": "<corr>", "op": "ping" }
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
@@ -249,6 +251,45 @@ func postScroll(dx: Int32, dy: Int32) {
     ev?.post(tap: .cghidEventTap)
 }
 
+// Humanlike trackpad-style scroll gesture. Distributes `dy`/`dx` across ~60fps
+// frames with an ease-in-out curve, wrapped in the Began/Changed.../Ended phase
+// sequence Chrome needs to latch onto inner sub-scrollers (overflow:auto divs).
+// Per-frame jitter keeps the delta stream from looking machine-regular.
+func postScrollGesture(dx: Int32, dy: Int32, durationMs: Double, jitterPx: Double) {
+    let frameMs: Double = 16.0
+    let steps = max(3, Int(ceil(durationMs / frameMs)))
+
+    func easeInOut(_ t: Double) -> Double {
+        t < 0.5 ? 2*t*t : -1 + (4-2*t)*t
+    }
+    func make(_ phase: Int64, _ w1: Int32, _ w2: Int32) -> CGEvent? {
+        let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                        wheel1: w1, wheel2: w2, wheel3: 0)
+        e?.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        return e
+    }
+
+    // kCGScrollPhaseBegan = 1, kCGScrollPhaseChanged = 2, kCGScrollPhaseEnded = 4
+    make(1, 0, 0)?.post(tap: .cghidEventTap)
+    usleep(useconds_t(frameMs * 1000))
+
+    var prev: Double = 0
+    for i in 1...steps {
+        let cur = easeInOut(Double(i) / Double(steps))
+        var dw1 = Double(dy) * (cur - prev)
+        var dw2 = Double(dx) * (cur - prev)
+        prev = cur
+        if jitterPx > 0 {
+            dw1 += Double.random(in: -jitterPx...jitterPx)
+            dw2 += Double.random(in: -jitterPx...jitterPx)
+        }
+        make(2, Int32(dw1.rounded()), Int32(dw2.rounded()))?.post(tap: .cghidEventTap)
+        usleep(useconds_t(frameMs * 1000))
+    }
+
+    make(4, 0, 0)?.post(tap: .cghidEventTap)
+}
+
 // ─── Dispatch ────────────────────────────────────────────────────────────────
 
 func handle(_ cmd: [String: Any]) {
@@ -322,6 +363,14 @@ func handle(_ cmd: [String: Any]) {
         let dx = (cmd["dx"] as? NSNumber)?.int32Value ?? 0
         let dy = (cmd["dy"] as? NSNumber)?.int32Value ?? 0
         postScroll(dx: dx, dy: dy)
+        ok(id)
+
+    case "scrollGesture":
+        let dx = (cmd["dx"] as? NSNumber)?.int32Value ?? 0
+        let dy = (cmd["dy"] as? NSNumber)?.int32Value ?? 0
+        let durationMs = (cmd["durationMs"] as? NSNumber)?.doubleValue ?? 400
+        let jitterPx = (cmd["jitterPx"] as? NSNumber)?.doubleValue ?? 3
+        postScrollGesture(dx: dx, dy: dy, durationMs: durationMs, jitterPx: jitterPx)
         ok(id)
 
     default:
