@@ -74,11 +74,21 @@ What actually goes into the prompt. No `lookup` (executor-only). Deterministic o
   "version": "1.0",
   "briefHash": "<refers back to source Brief>",
   "viewport": { "width": …, "height": … },
-  "listing": "[@e1]  button    \"Home\"\n[@e2]  link      \"Jobs\" -> /jobs\n…"
+  "listing": "[@t1]  heading  \"Sign in\"  (390,118)\n[@t2]  label  \"Email\"  (270,168)\n[@e1]  textbox  \"Email\"  (390,196)\n…"
 }
 ```
 
-The `listing` is a compact, fixed-width-ish text format optimized for LLM tokenization and grep-ability. Refs are bracketed (`[@e1]`) to keep them visually distinct from text content. Text nodes may or may not appear in the listing depending on `Reduce` configuration; if they do, they use `[@t<n>]`.
+The `listing` is a compact, fixed-width-ish text format optimized for LLM tokenization and grep-ability. Refs are bracketed (`[@e1]`) to keep them visually distinct from content.
+
+`reduce(brief, view)` builds it (config block `view`, see Configuration):
+
+- **Interleaved by reading order.** Interactive elements (`[@e]`) and text nodes (`[@t]`) are merged into one list sorted top-to-bottom, left-to-right (rows banded by ~10px, then by x), so a label sits next to the field it describes. `@t` lines are read-only grounding — the validator rejects them as action targets.
+- **`view.includeText`** (default true) — interleave text nodes at all.
+- **`view.includeCoords`** (default true) — append a rounded `(x,y)` center per line so the model can disambiguate repeated controls.
+- **`view.maxTextChars`** (default 200) — truncate long text-node names.
+- **`view.dedupeText`** (default true) — collapse *consecutive* identical text nodes (reset by any element), so adjacent AX duplication is removed but spatially-separated repeats — e.g. per-row prices — are kept.
+
+Coordinates are shown but **not** hashed (`briefHash` excludes bbox), so enabling them doesn't affect the no-change short-circuit.
 
 ### Action
 

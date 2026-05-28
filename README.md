@@ -155,6 +155,13 @@ All knobs live in `open-recon.config.json` at the repo root. CLI flags override 
 
   "settle": { "afterActionMs": 150, "maxMs": 2000 },
 
+  "view": {                       // how the page is rendered for the LLM
+    "includeText": true,          // interleave headings/labels/prose as @t lines
+    "includeCoords": true,        // append a compact (x,y) per line
+    "maxTextChars": 200,          // truncate long text
+    "dedupeText": true            // collapse consecutive identical text
+  },
+
   "executor": {
     "backend": "cdp",             // cdp | os
     "binPath": null,
@@ -345,6 +352,20 @@ Sub-runs (`InlineTextBox`, `LineBreak`) are intentionally excluded — they're f
 ## Using the brief with your own LLM
 
 In `--lean --in-viewport-only` mode, a typical page compresses to a few thousand tokens — small enough to fit alongside system prompts and tool definitions.
+
+The agent loop renders the brief via `reduce()` into a reading-order listing that interleaves interactive elements and text context, e.g.:
+
+```
+[@t1]  heading     "Sign in to Acme"     (390,118)
+[@t2]  label       "Email"               (270,168)
+[@e1]  textbox     "Email"               (390,196)
+[@t3]  label       "Password"            (280,228)
+[@e2]  textbox     "Password"            (390,256)
+[@e3]  link        "Forgot password?"  -> /reset  (310,295)
+[@e4]  button      "Sign in"             (300,350)
+```
+
+`[@e…]` are action targets; `[@t…]` are read-only context the model can cite but not act on (the validator enforces this). The `(x,y)` suffixes let the model disambiguate repeated controls. Toggle text, coordinates, truncation, and dedupe under the `view` block in `open-recon.config.json`.
 
 Each element and text node carries a short `ref` string (`@e1`, `@t1`, …) that the LLM can reference in actions. The snapshot's `lookup` table resolves each ref to a CDP `backendNodeId` for the same session:
 
