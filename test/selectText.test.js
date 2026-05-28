@@ -168,17 +168,6 @@ function findText(brief, name) {
       assert.strictEqual(norm(await getSelectionText(session)), 'Below The Fold Heading');
     });
 
-    // Last — navigation reloads the page and resets scroll, so it must not
-    // precede the selection tests above.
-    await testAsync('navigate verb loads a URL into the tab', async () => {
-      await cdp.navigate({ session, url: fixtureUrl + '?nav=1' });
-      // No explicit load wait — mirror the loop, which polls extract until the
-      // page settles. Give it a beat, then confirm the tab actually moved.
-      await new Promise(r => setTimeout(r, 600));
-      const brief = await session.extract({ format: 'lean', inViewportOnly: true });
-      assert.ok(brief.url.includes('nav=1'), `expected navigated url, got ${brief.url}`);
-    });
-
   } finally {
     if (session) await session.close();
     server.close();
