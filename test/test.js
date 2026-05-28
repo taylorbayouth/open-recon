@@ -119,10 +119,18 @@ test('bboxArr: rounds floats and returns array', () => {
 // ─── Integration tests (requires Chrome running on port 9222) ────────────────
 
 (async () => {
+  // Integration tests drive a real Chrome tab — they navigate it to the fixture,
+  // which would hijack whatever you're doing. So they're opt-in: set
+  // OPEN_RECON_E2E=1 to run them. `npm test` stays browser-free and deterministic.
+  if (!process.env.OPEN_RECON_E2E) {
+    console.log('\nIntegration tests: skipped (set OPEN_RECON_E2E=1 to run them).\n');
+    printSummary();
+    return;
+  }
   const chromeAvailable = await isRunning(9222);
   if (!chromeAvailable) {
     console.log('\nIntegration tests: skipped (Chrome not running on port 9222)');
-    console.log('  Run `npm run launch` then `node test/test.js` to include them.\n');
+    console.log('  Run `npm run launch`, then `OPEN_RECON_E2E=1 node test/test.js`.\n');
     printSummary();
     return;
   }

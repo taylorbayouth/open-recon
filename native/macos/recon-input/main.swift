@@ -22,6 +22,7 @@
 //   { "id": "<corr>", "op": "pos" }                          // returns cursor
 //   { "id": "<corr>", "op": "ping" }
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
+//   { "id": "<corr>", "op": "frontapp" }                     // frontmost app id
 //
 // Response shape:
 //   { "id": "<corr>", "ok": true,  "data": { ... } }
@@ -261,6 +262,13 @@ func handle(_ cmd: [String: Any]) {
         // Reports whether this process holds Accessibility permission. Without
         // it, CGEvent posting silently no-ops, so setup probes this up front.
         ok(id, ["trusted": AXIsProcessTrusted()])
+
+    case "frontapp":
+        // The frontmost (foreground) app. The executor checks this before every
+        // input op: CGEvents go to whatever app is in front, so if focus left
+        // Chrome we must abort rather than click/type into another application.
+        let app = NSWorkspace.shared.frontmostApplication
+        ok(id, ["bundleId": app?.bundleIdentifier ?? "", "name": app?.localizedName ?? ""])
 
     case "pos":
         let p = currentMousePos()
