@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>dom-agent fixture</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.5; background: #fff; }
+    nav { display: flex; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #e5e5e5; margin-bottom: 32px; }
+    nav a { text-decoration: none; color: #0066cc; font-size: 0.9rem; }
+    nav a:hover { text-decoration: underline; }
+    h1 { font-size: 1.75rem; margin-bottom: 24px; }
+    h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; }
+    section { margin-bottom: 36px; }
+    form { display: flex; flex-direction: column; gap: 10px; }
+    label { font-size: 0.875rem; font-weight: 500; color: #444; }
+    input[type="email"],
+    input[type="password"],
+    input[type="search"] { padding: 8px 10px; font-size: 0.95rem; border: 1px solid #ccc; border-radius: 6px; width: 100%; }
+    input:focus { outline: 2px solid #0066cc; outline-offset: 1px; }
+    button { padding: 8px 16px; font-size: 0.95rem; border: none; border-radius: 6px; cursor: pointer; }
+    button[type="submit"], button.primary { background: #0066cc; color: #fff; }
+    button[type="button"] { background: #f0f0f0; color: #1a1a1a; }
+    button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+    fieldset { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; }
+    legend { font-size: 0.875rem; font-weight: 600; padding: 0 4px; }
+    .radio-group { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .radio-group label { display: flex; align-items: center; gap: 8px; font-weight: 400; cursor: pointer; }
+    a.inline { color: #0066cc; font-size: 0.875rem; }
+    footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #e5e5e5; display: flex; gap: 20px; }
+    footer a { color: #888; font-size: 0.8rem; text-decoration: none; }
+
+    /* CSS visibility test cases — distinctly named so tests can assert absence */
+    .test-hidden-visibility { visibility: hidden; }
+    .test-hidden-opacity    { opacity: 0; }
+    .test-no-pointer-events { pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <nav aria-label="Main navigation">
+    <a href="/">Home</a>
+    <a href="/about">About</a>
+    <a href="/contact">Contact</a>
+  </nav>
+
+  <main>
+    <h1>Test Page</h1>
+
+    <section aria-label="Login form section">
+      <h2>Sign in</h2>
+      <form aria-label="Login">
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="you@example.com">
+
+        <label for="password">Password</label>
+        <input id="password" type="password">
+
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;">
+          <input type="checkbox" id="remember"> Remember me
+        </label>
+
+        <button type="submit">Sign in</button>
+        <a href="/forgot" class="inline">Forgot password?</a>
+      </form>
+    </section>
+
+    <section aria-label="Search section">
+      <h2>Search</h2>
+      <form role="search" aria-label="Site search">
+        <label for="q">Search</label>
+        <input id="q" type="search" placeholder="Search…">
+        <button type="submit">Go</button>
+      </form>
+    </section>
+
+    <section aria-label="Options">
+      <h2>Options</h2>
+      <fieldset>
+        <legend>Preferred contact method</legend>
+        <div class="radio-group">
+          <label><input type="radio" name="contact" value="email"> Email</label>
+          <label><input type="radio" name="contact" value="phone"> Phone</label>
+        </div>
+      </fieldset>
+      <div style="display:flex;gap:10px;margin-top:12px;">
+        <button type="button" disabled>Locked action</button>
+        <button type="button">Open dialog</button>
+      </div>
+    </section>
+
+    <!-- CSS filter test cases: these must never appear in lean or tree output -->
+    <section aria-label="CSS filter tests" style="position:relative;">
+      <button class="test-hidden-visibility">CSS visibility hidden button</button>
+      <button class="test-hidden-opacity">CSS opacity zero button</button>
+      <button class="test-no-pointer-events">CSS pointer events none button</button>
+    </section>
+
+  </main>
+
+  <footer>
+    <a href="/privacy">Privacy</a>
+    <a href="/terms">Terms</a>
+  </footer>
+
+</body>
+</html>

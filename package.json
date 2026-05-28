@@ -1,0 +1,25 @@
+{
+  "name": "open-recon",
+  "version": "1.0.0",
+  "description": "Extract interactive elements and text from a live Chrome tab via CDP. No JS injection. No DOM mutations.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "open-recon": "./cli.js"
+  },
+  "scripts": {
+    "launch": "node launch.js",
+    "extract": "node cli.js --tree --pretty",
+    "test": "node test/test.js"
+  },
+  "keywords": [
+    "cdp", "chrome", "devtools", "accessibility", "dom", "scraping",
+    "browser-automation", "llm", "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "chrome-remote-interface": "^0.34.0"
+  }
+}
