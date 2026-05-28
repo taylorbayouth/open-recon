@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "model": null,
+  "model": "gpt-5.4-mini",
 
   "loop": {
     "maxSteps": 30,
@@ -33,5 +33,10 @@
       "preClickPauseMsMin": 40,
       "preClickPauseMsMax": 160
     }
+  },
+
+  "log": {
+    "enabled": true,
+    "dir": "logs"
   }
 }

@@ -6,6 +6,9 @@
 // (unlike test.js, whose integration half needs a live browser).
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const { reduce, computeBriefHash } = require('../lib/reduce');
 const { validate } = require('../lib/validate');
@@ -13,6 +16,8 @@ const registry = require('../lib/actions');
 const { createExecutor } = require('../lib/execute');
 const planMod = require('../lib/plan');
 const { run } = require('../lib/loop');
+const { loadConfig, ConfigError } = require('../lib/config');
+const { createLogger } = require('../lib/log');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -109,6 +114,7 @@ const baseConfig = (overrides = {}) => ({
   settle: { afterActionMs: 0, maxMs: 0 },
   view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
   executor: { backend: 'cdp' },
+  log: { enabled: false },
 });
 
 // ─── suites ──────────────────────────────────────────────────────────────────
@@ -203,6 +209,20 @@ async function validateSuite() {
     const { ok } = validate([action('press', { args: { key: 'Enter', bogus: 1 } })], {}, registry);
     assert.strictEqual(ok.length, 1);
   });
+
+  await test('malformed action records an error instead of throwing', () => {
+    const { ok, errors } = validate([null, 'bad'], {}, registry);
+    assert.strictEqual(ok.length, 0);
+    assert.strictEqual(errors.length, 2);
+    assert.match(errors[0].error, /action must be an object/);
+  });
+
+  await test('non-array actions payload records an error instead of throwing', () => {
+    const { ok, errors } = validate({ verb: 'done', args: {} }, {}, registry);
+    assert.strictEqual(ok.length, 0);
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0].error, /actions must be an array/);
+  });
 }
 
 async function executeSuite() {
@@ -252,6 +272,15 @@ async function executeSuite() {
     assert.strictEqual(wheel[1].y, 400);
   });
 
+  await test('unknown scroll direction is an error observation with no wheel dispatch', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('scroll', { args: { direction: 'sideways' } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'error');
+    assert.match(obs.error, /unknown scroll direction/);
+    assert.ok(!session.calls.some(c => c[0] === 'mouse' && c[1].type === 'mouseWheel'));
+  });
+
   await test('done is ok with no dispatch and no settle', async () => {
     const session = makeFakeSession([makeBrief()]);
     const exec = createExecutor({ backend: 'cdp' }, {});
@@ -274,6 +303,38 @@ async function executeSuite() {
     const [obs] = await exec.execute([action('click', { ref: '@e9' })], session, makeBrief());
     assert.strictEqual(obs.status, 'error');
     assert.match(obs.error, /not found in brief/);
+  });
+}
+
+async function configSuite() {
+  console.log('\nconfig:');
+
+  await test('invalid config JSON fails explicitly', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-config-'));
+    const file = path.join(dir, 'bad.json');
+    try {
+      fs.writeFileSync(file, '{ bad json');
+      assert.throws(() => loadConfig({ path: file, reload: true }), ConfigError);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+async function logSuite() {
+  console.log('\nlog:');
+
+  await test('disabled logger is a no-op and creates no files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-log-'));
+    const logDir = path.join(dir, 'logs');
+    try {
+      const logger = createLogger({ enabled: false, dir: logDir });
+      logger.event({ kind: 'turn' });
+      logger.finalize({ status: 'completed', result: null, stats: {} });
+      assert.strictEqual(fs.existsSync(logDir), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 }
 
@@ -411,6 +472,8 @@ async function memorySuite() {
   await reduceSuite();
   await validateSuite();
   await executeSuite();
+  await configSuite();
+  await logSuite();
   await loopSuite();
   await memorySuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

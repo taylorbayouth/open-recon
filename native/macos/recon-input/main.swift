@@ -78,8 +78,14 @@ func mouseEventType(_ button: CGMouseButton, down: Bool) -> CGEventType {
     }
 }
 
+// Tracks whether the left button is currently held. While it is, motion must be
+// posted as `.leftMouseDragged` (not `.mouseMoved`) or apps won't extend a text
+// selection / drag — a plain move with the button down is ignored as a gesture.
+var leftButtonDown = false
+
 func postMouseMove(to p: CGPoint) {
-    let ev = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+    let type: CGEventType = leftButtonDown ? .leftMouseDragged : .mouseMoved
+    let ev = CGEvent(mouseEventSource: nil, mouseType: type,
                      mouseCursorPosition: p, mouseButton: .left)
     ev?.post(tap: .cghidEventTap)
 }
@@ -280,12 +286,14 @@ func handle(_ cmd: [String: Any]) {
 
     case "down":
         let b = cgButton((cmd["button"] as? String) ?? "left")
+        if b == .left { leftButtonDown = true }
         postMouseButton(b, down: true, at: currentMousePos())
         ok(id)
 
     case "up":
         let b = cgButton((cmd["button"] as? String) ?? "left")
         postMouseButton(b, down: false, at: currentMousePos())
+        if b == .left { leftButtonDown = false }
         ok(id)
 
     case "type":

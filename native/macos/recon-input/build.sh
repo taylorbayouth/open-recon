@@ -2,7 +2,7 @@
 # Build recon-input — the macOS OS-level input driver for Open Recon.
 #
 # Requires the Xcode command-line tools (`xcode-select --install`).
-# Run once after cloning; the resulting binary is checked into bin/.
+# Run once after cloning; the resulting binary is written to ignored bin/.
 
 set -euo pipefail
 

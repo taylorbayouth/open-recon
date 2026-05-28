@@ -140,7 +140,6 @@ export OPENAI_API_KEY=sk-...
 node agent.js "search for hello world"                   # openai + cdp (defaults)
 node agent.js --executor os "post 'hello' on twitter"    # os backend
 node agent.js --provider anthropic "..."                 # different LLM
-node agent.js --no-preflight "..."                       # skip checks (CI)
 ```
 
 Just navigate the launched Chrome tab to the page your task expects. The manual
@@ -180,6 +179,11 @@ All knobs live in `open-recon.config.json` at the repo root. CLI flags override 
     "humanize": { "enabled": true, "mouseSpeedPxPerSec": 1400, "mouseJitterPx": 2,
                   "keystrokeDelayMsMin": 25, "keystrokeDelayMsMax": 85,
                   "preClickPauseMsMin": 40, "preClickPauseMsMax": 160 }
+  },
+
+  "log": {
+    "enabled": true,              // write per-run logs
+    "dir": "logs"
   }
 }
 ```
@@ -188,7 +192,7 @@ Point `OPEN_RECON_CONFIG` at a different path to use an alternate file.
 
 ### No-change short-circuit
 
-Each turn, the loop hashes the page (content only — `timestamp`, `bbox`, and `stats` are excluded) and compares it to what the model last acted on. If nothing changed, it **doesn't burn an LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes (proceed immediately) or `loop.maxNoChangePolls` is hit (proceed anyway). This is how the agent waits out a slow page load without a fixed timer, and avoids paying for identical turns. Disable with `--no-short-circuit`.
+Each turn, the loop hashes the page (content only — `timestamp`, `bbox`, and `stats` are excluded) and compares it to what the model last acted on. If nothing changed, it **doesn't burn an LLM call** — it waits `loop.pollMs` and re-checks, repeating until the page changes (proceed immediately) or `loop.maxNoChangePolls` is hit (proceed anyway). This is how the agent waits out a slow page load without a fixed timer, and avoids paying for identical turns. Disable by setting `loop.shortCircuitOnNoChange` to `false` in `open-recon.config.json`.
 
 ---
 
@@ -234,7 +238,7 @@ See `lib/executors/os.js` for the full pixel-to-screen math, and `native/macos/r
 
 ## CLI
 
-### Extractor (`node cli.js` or `open-recon`)
+### Extractor (`node cli.js` or `open-recon-extract`)
 
 | Flag | Description |
 |---|---|
@@ -253,14 +257,13 @@ Extractor JSON always goes to stdout. Progress logs are only emitted with
 | Flag | Description |
 |---|---|
 | `--task <string>`, positional | The task for the agent (required). |
-| `--max-steps <n>` | Max loop iterations (default: 30). |
-| `--model <id>` | Override the default model. |
-| `--verbose`, `-v` | Log each loop turn to stderr. |
+| `--provider <name>`, `-p` | LLM provider: `openai` \| `anthropic` \| `ollama`. |
+| `--model <id>` | Override the provider's default model. |
+| `--poll-ms <n>` | Wait between re-checks while the page is unchanged. |
 | `--executor <cdp\|os>` | Input backend. Default: env `OPEN_RECON_EXECUTOR` or `cdp`. |
-| `--no-humanize` | Disable Bezier motion / keystroke delays (`os` only). |
-| `--mouse-speed <px/s>` | Cursor travel speed. Default: 1400. |
-| `--mouse-jitter <px>` | Max ± per-frame deviation from the Bezier path. Default: 2. |
-| `--keystroke-delay <lo[,hi]>` | Per-character delay range, ms. Default: 25,85. |
+| `--verbose`, `-v` | Log each loop turn to stderr. |
+
+All other knobs — `loop.maxSteps`, `loop.shortCircuitOnNoChange`, and the `executor.humanize.*` motion/timing settings — live in `open-recon.config.json` only.
 
 ---
 

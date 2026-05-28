@@ -13,6 +13,7 @@ function parseArgs() {
     else if (arg === '--pretty')      opts.pretty = true;
     else if (arg === '--launch')      opts._launchOnly = true;
     else if (arg === '--verbose')     opts.verbose = true;
+    else throw new Error(`unknown option: ${arg}`);
   }
   return opts;
 }
@@ -29,7 +30,7 @@ async function main() {
       await launch(opts);
       console.log(`Chrome ready on port ${opts.port || 9222}.`);
     }
-    console.log('Navigate to any page, then run: open-recon --tree');
+    console.log('Navigate to any page, then run: open-recon-extract --tree');
     return;
   }
 

@@ -4,6 +4,7 @@ const assert = require('assert');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const CDP = require('chrome-remote-interface');
 
 const { flattenProperties, isInViewport, isLeanVisible, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
@@ -141,6 +142,9 @@ test('bboxArr: rounds floats and returns array', () => {
 
   let session;
   try {
+    const pages = (await CDP.List({ port: 9222 })).filter(t => t.type === 'page');
+    if (!pages.length) await CDP.New({ port: 9222 });
+
     session = await connect({ port: 9222 });
 
     // Navigate to fixture

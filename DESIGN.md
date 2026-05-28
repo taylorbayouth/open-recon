@@ -30,11 +30,11 @@ This document captures the architecture, contracts, and conventions for the broa
 |---|---|---|---|---|
 | Connect | port, target hints | `Session` | [lib/connect.js](lib/connect.js) | exists |
 | Extract | `Session`, opts | `Brief` | [lib/extract.js](lib/extract.js) | exists |
-| Reduce | `Brief`, history | `LLMView` | `lib/reduce.js` | planned |
-| Plan | `LLMView`, goal, tools | `Completion` (→ `Action[]`) | `lib/plan.js` + `lib/providers/*` | planned |
-| Validate | `Action[]`, `Brief.lookup` | checked `Action[]` or errors | `lib/validate.js` | planned |
+| Reduce | `Brief`, history | `LLMView` | `lib/reduce.js` | exists |
+| Plan | `LLMView`, goal, tools | `Completion` (→ `Action[]`) | `lib/plan.js` + `lib/providers/*` | exists |
+| Validate | `Action[]`, `Brief.lookup` | checked `Action[]` or errors | `lib/validate.js` | exists |
 | Execute | `Action[]`, `Session` | `Observation[]` | `lib/execute.js` + `lib/executors/*` | exists |
-| Loop | task, session | `Run` | `lib/loop.js` | planned |
+| Loop | task, session | `Run` | `lib/loop.js` | exists |
 
 `lib/actions.js` (registry) and `lib/prompt.js` (system prompt + vocab generation) are shared modules used by multiple stages.
 
@@ -188,6 +188,7 @@ module.exports = {
   focus:    { requiresRef: true,  refType: ['e'],       args: {} },
   type:     { requiresRef: true,  refType: ['e'],       args: { text: 'string' } },
   press:    { requiresRef: false,                       args: { key: 'string' } },
+  selectText:{ requiresRef: true,  refType: ['e', 't'],  args: {} },
   scroll:   { requiresRef: false,                       args: { direction: 'string', amount: 'number?' } },
   navigate: { requiresRef: false,                       args: { url: 'string' } },
   wait:     { requiresRef: false,                       args: { ms: 'number' } },
@@ -209,6 +210,7 @@ Rules:
 | `focus` | Focus the element | Useful before `type` on inputs that need explicit focus. |
 | `type` | Type the literal string into the element | Focuses first, then dispatches per-character `Input.dispatchKeyEvent`. |
 | `press` | Send a single key (Enter, Tab, Escape, ArrowDown, …) | Top-level — does not target a ref. Useful for form submission. |
+| `selectText` | Highlight a node's full text | Targets `@e` or `@t`. Click-drag from the node's top-left to bottom-right corner (selects whole node, not a sub-phrase). |
 | `scroll` | Scroll the page | `direction: "up"|"down"`, optional `amount` in CSS pixels (default: one viewport). |
 | `navigate` | Load a new URL | Causes a full re-snapshot; refs from prior briefs are invalidated. |
 | `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
@@ -315,6 +317,8 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `cdp` | `cdp` or `os` (also `OPEN_RECON_EXECUTOR`). |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
+| `log.enabled` | `true` | Write per-run JSONL and latest run artifacts. |
+| `log.dir` | `logs` | Directory for run logs, resolved relative to the current working directory. |
 
 ---
 
