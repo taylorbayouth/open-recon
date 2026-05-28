@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "model": "gpt-5.4-mini",
+  "model": "gpt-5.5",
 
   "loop": {
     "maxSteps": 50,
@@ -27,6 +27,7 @@
     "binPath": null,
     "pauseOnUserInput": true,
     "userIdleMs": 600,
+    "raiseChromeOnStart": true,
     "humanize": {
       "enabled": true,
       "mouseSpeedPxPerSec": 1400,
@@ -38,6 +39,13 @@
       "scrollDurationMs": 400,
       "scrollJitterPx": 3
     }
+  },
+
+  "vision": {
+    "provider": "openai",
+    "model": "gpt-5.4-mini",
+    "prompt": "Describe what you see in as much detail as possible.",
+    "maxTokens": 1024
   },
 
   "log": {

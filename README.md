@@ -223,6 +223,7 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
     "backend": "os",
     "pauseOnUserInput": true,        // os: back off while you use the mouse/keyboard
     "userIdleMs": 600,               // os: resume after you've been idle this long
+    "raiseChromeOnStart": true,      // os: bring the agent's Chrome to the front at start
     "humanize": {
       "enabled": true,
       "mouseSpeedPxPerSec": 1400,
@@ -230,11 +231,19 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
       "keystrokeDelayMsMin": 25,
       "keystrokeDelayMsMax": 85
     }
+  },
+
+  "vision": {                        // secondary model for the `screenshot` verb
+    "provider": "openai",            // independent of the planner provider above
+    "model": null,                  // null → a multimodal default for the provider
+    "prompt": "Describe what you see in as much detail as possible."
   }
 }
 ```
 
 CLI flags override the file. Env vars sit in between.
+
+The `screenshot` verb lets the agent *see* when the text listing isn't enough — an image CAPTCHA, a chart, a canvas — or just capture a page on request. It saves the PNG to the run folder (`runs/<id>/images/`), sends it to the `vision` model with the prompt above (plus an optional per-call hint like "read the distorted characters"), and feeds the description plus the saved path back into the agent's working memory so it can act on what it saw or hand back the file.
 
 ---
 

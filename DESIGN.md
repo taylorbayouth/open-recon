@@ -216,6 +216,7 @@ Rules:
 | `selectText` | Highlight a node's full text | Targets `@e` or `@t`. Click-drag from the node's top-left to bottom-right corner (selects whole node, not a sub-phrase). |
 | `scroll` | Scroll the page | `direction: "up"|"down"`, optional `amount` in CSS pixels (default: one viewport). |
 | `navigate` | Load a new URL | Causes a full re-snapshot; refs from prior briefs are invalidated. |
+| `screenshot` | Capture the viewport, save it, and have a vision model describe it | Top-level, `changesPage:false`. For visual content the text listing can't convey (image CAPTCHAs, charts, canvas) or "take a screenshot" tasks. Optional `hint` focuses the description. Backend-agnostic (CDP `Page.captureScreenshot`). The PNG is saved to `runs/<id>/images/` (via the scratchpad) and the saved path + description ride back as the Observation detail into the event log, so the model can finish referencing the file. Repeating it on an unchanged page trips the stuck-guard. See `lib/vision.js` + `vision` config. |
 | `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
 | `done` | Signal task completion | Loop captures the optional `result` string and exits with status `completed`. |
 
@@ -322,7 +323,12 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
 | `executor.pauseOnUserInput` | `true` | OS backend: pause input while the human uses the mouse/keyboard, auto-resume when idle. |
 | `executor.userIdleMs` | `600` | OS backend: how long the human must be idle before input resumes. |
+| `executor.raiseChromeOnStart` | `true` | OS backend: preflight foregrounds the agent's Chrome (PID-targeted) so the frontmost-gate is satisfied without manual clicking. |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
+| `vision.provider` | `openai` | Vision model provider for the `screenshot` verb (`openai`/`anthropic`/`ollama`). Independent of the planner `provider`. |
+| `vision.model` | `null` | `null` → a multimodal default for the chosen provider. |
+| `vision.prompt` | `"Describe what you see…"` | Static base prompt sent with the image; a per-call `hint` is appended. |
+| `vision.maxTokens` | `1024` | Output cap for the vision call. |
 | `log.enabled` | `true` | Write per-run JSONL and latest run artifacts. |
 | `log.dir` | `logs` | Directory for run logs, resolved relative to the current working directory. |
 

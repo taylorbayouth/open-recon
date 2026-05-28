@@ -26,6 +26,7 @@
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
 //   { "id": "<corr>", "op": "frontapp" }                     // frontmost app id
 //   { "id": "<corr>", "op": "idle" }                         // real-user input idle
+//   { "id": "<corr>", "op": "raise", "pid": 123 }            // foreground a pid
 //
 // Response shape:
 //   { "id": "<corr>", "ok": true,  "data": { ... } }
@@ -334,6 +335,19 @@ func handle(_ cmd: [String: Any]) {
         // Chrome we must abort rather than click/type into another application.
         let app = NSWorkspace.shared.frontmostApplication
         ok(id, ["bundleId": app?.bundleIdentifier ?? "", "name": app?.localizedName ?? ""])
+
+    case "raise":
+        // Bring a specific process to the foreground by PID. Permission-free
+        // (NSRunningApplication.activate needs no Accessibility/Automation grant)
+        // and PID-targeted, so preflight can foreground the open-recon Chrome
+        // without grabbing a different Chrome instance (e.g. a personal one).
+        guard let pid = (cmd["pid"] as? NSNumber)?.int32Value else { fail(id, "raise requires pid"); return }
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [.activateAllWindows])
+            ok(id, ["raised": true])
+        } else {
+            ok(id, ["raised": false])   // no live app for that pid — caller treats as best-effort
+        }
 
     case "pos":
         let p = currentMousePos()
