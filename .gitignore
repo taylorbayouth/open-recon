@@ -16,3 +16,6 @@ runs/
 
 # Built native binary — per-platform, rebuild via native/macos/recon-input/build.sh
 native/macos/recon-input/bin/
+
+# Release artifacts (signed/notarized dmg + zip) — produced by release.sh
+native/macos/recon-input/dist/
