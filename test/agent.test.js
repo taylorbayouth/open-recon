@@ -66,6 +66,10 @@ function makeFakeSession(briefQueue) {
       pushNodesByBackendIdsToFrontend: async ({ backendNodeIds }) => ({ nodeIds: backendNodeIds.map(() => 9001) }),
       focus: async (p) => { calls.push(['focus', p]); },
     },
+    Runtime: {
+      // selectText reads the live selection through here; return a fixed string.
+      evaluate: async (p) => { calls.push(['evaluate', p]); return { result: { value: 'Selected Heading' } }; },
+    },
   };
   return {
     client,
@@ -442,6 +446,24 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'stuck', r.error);
     // click executes twice; the 3rd identical pick (with no page change) aborts.
     assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('selectText reports the selected text and skips the no-change wait', async () => {
+    const reqs = installFakeProvider([
+      [action('selectText', { ref: '@t1' })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 5 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    // The next turn's prompt must show what got selected.
+    assert.match(reqs[1].messages[0].content, /selected: "Selected Heading"/);
+    // changesPage:false ⇒ no polling for a change that never comes: exactly one
+    // extract per turn (2), not 2 + the maxNoChangePolls extras.
+    assert.strictEqual(session.extractCount, 2);
   });
 
   await test('turn message carries URL (fragment stripped), title, and scroll position', async () => {
