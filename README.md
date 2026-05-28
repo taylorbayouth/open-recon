@@ -446,7 +446,7 @@ npm run launch
 # or: node launch.js
 ```
 
-This starts Chrome on port `9222` with a dedicated profile at `~/.chrome-agent` and detaches it. If Chrome is already running on that port, it prints a message and exits.
+This starts Chrome on port `9222` with a dedicated, isolated profile at `~/.open-recon/profile` and detaches it. If Chrome is already running on that port, it prints a message and exits.
 
 You can also start Chrome manually:
 
@@ -454,10 +454,27 @@ You can also start Chrome manually:
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --remote-debugging-port=9222 \
   --remote-allow-origins=* \
-  --user-data-dir=$HOME/.chrome-agent
+  --user-data-dir=$HOME/.open-recon/profile
 ```
 
-> The launcher intentionally avoids `--enable-automation` and does not pass `--disable-blink-features=AutomationControlled`; with a bare remote-debugging port, `navigator.webdriver` is not advertised, and avoiding the extra flag prevents Chrome's unsupported-command-line warning bar from shifting layout. The dedicated profile is still fingerprintable as a fresh user (no history, no cookies) — for maximum blending, point `--user-data-dir` at your real Chrome profile after closing Chrome.
+> The launcher intentionally avoids `--enable-automation` and does not pass `--disable-blink-features=AutomationControlled`; with a bare remote-debugging port, `navigator.webdriver` is not advertised, and avoiding the extra flag prevents Chrome's unsupported-command-line warning bar from shifting layout. The dedicated profile is still fingerprintable as a fresh user (no history, no cookies); see [Browser profile & sessions](#browser-profile--sessions) for the isolation/blending tradeoff.
+
+### Browser profile & sessions
+
+Open Recon launches Chrome with a **dedicated, isolated profile** — by default `~/.open-recon/profile` — never your everyday Chrome profile. Two consequences:
+
+- **It starts logged out of everything.** On first run nothing is signed in, because this profile doesn't share your normal Chrome's cookies. Log into the sites your task needs once, *in the agent's Chrome window*, and those sessions persist across runs (the profile lives on disk in your home directory). The launcher prints a one-time notice the first time it creates the profile.
+- **Your real browsing is never touched.** Cookies, history, and logins accumulate only in this profile, so automation can't act as logged-in-you on your real identity.
+
+To start fresh and clear all saved logins, delete the folder:
+
+```bash
+rm -rf ~/.open-recon/profile
+```
+
+Relocate or sandbox it per task with `userDataDir` (library) or `--user-data-dir` (manual launch).
+
+> **Advanced — at your own risk.** For maximum fingerprint blending you *can* point the profile at your real Chrome data dir, but only after fully quitting Chrome (it refuses to open a profile already in use), and understand that this exposes **all** your real logins to the automated browser under your real identity. The isolated default is strongly recommended.
 
 ### Granting Accessibility permission (os executor only)
 
