@@ -130,12 +130,22 @@ Done. 23 elements in 373ms
 
 ### As an agent
 
+One command does everything. It runs preflight — installs deps if missing,
+builds the `os` driver and checks Accessibility permission when that backend is
+selected, verifies your provider key, and launches Chrome if it isn't already
+running — then runs your task. Re-running is safe; satisfied steps are skipped.
+
 ```bash
 export OPENAI_API_KEY=sk-...
 node agent.js "search for hello world"                   # openai + cdp (defaults)
 node agent.js --executor os "post 'hello' on twitter"    # os backend
 node agent.js --provider anthropic "..."                 # different LLM
+node agent.js --no-preflight "..."                       # skip checks (CI)
 ```
+
+Just navigate the launched Chrome tab to the page your task expects. The manual
+`npm run launch` and `build.sh` steps above are only needed when using the
+extractor on its own — the agent entry point handles them for you.
 
 ---
 

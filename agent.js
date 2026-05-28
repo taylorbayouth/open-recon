@@ -3,23 +3,22 @@
 
 require('dotenv').config();
 
-// Slice-1 smoke harness. Connects to Chrome on port 9222, runs an agent loop
-// against the current tab, prints the Run artifact as JSON.
+// Single entry point. Runs preflight (deps, driver, Accessibility, creds,
+// Chrome), then an agent loop against the current tab, and prints the Run
+// artifact as JSON. The task and flags you pass are the agent's instructions.
 //
 // Usage:
 //   OPENAI_API_KEY=...    node agent.js "search for hello world"
 //   ANTHROPIC_API_KEY=... node agent.js --provider anthropic "..."
 //   node agent.js --provider ollama --model llama3.1 "..."
 //
-// Prerequisites:
-//   - Chrome running with --remote-debugging-port=9222 (run `npm run launch`)
-//   - Navigate Chrome to whatever page the task expects
-//   - API key for the chosen provider (openai → OPENAI_API_KEY, anthropic →
-//     ANTHROPIC_API_KEY; ollama needs none, just a running local server)
+// Preflight launches Chrome if it isn't already running; just navigate the tab
+// to whatever page the task expects. Pass --no-preflight to skip the checks.
 
 const { connect } = require('./lib/connect');
 const { run } = require('./lib/loop');
 const { loadConfig, deepMerge } = require('./lib/config');
+const { preflight, PreflightError } = require('./lib/preflight');
 
 // Parse CLI flags into a partial config override. Only keys actually passed are
 // set (everything else stays undefined), so deepMerge leaves config-file values
@@ -51,6 +50,7 @@ function parseArgs(argv) {
     else if (a === '--max-steps') override.loop.maxSteps = num(argv[++i], '--max-steps', parseInt);
     else if (a === '--poll-ms') override.loop.pollMs = num(argv[++i], '--poll-ms', parseInt);
     else if (a === '--no-short-circuit') override.loop.shortCircuitOnNoChange = false;
+    else if (a === '--no-preflight') args.noPreflight = true;
     else if (a === '--executor') override.executor.backend = argv[++i];
     else if (a === '--no-humanize') override.executor.humanize.enabled = false;
     else if (a === '--mouse-speed') override.executor.humanize.mouseSpeedPxPerSec = num(argv[++i], '--mouse-speed');
@@ -83,6 +83,7 @@ Options:
   --max-steps <n>              Max loop iterations
   --poll-ms <n>                Wait between re-checks while the page is unchanged
   --no-short-circuit           Always re-prompt, even if the page is unchanged
+  --no-preflight               Skip setup/launch checks; assume Chrome is ready
   --executor <cdp|os>          Input backend. 'os' uses recon-input (macOS).
   --no-humanize                Disable Bezier motion / keystroke delays (os only)
   --mouse-speed <px/s>         Cursor travel speed
@@ -102,19 +103,6 @@ Environment:
   OPEN_RECON_EXECUTOR     Override config executor backend ('cdp'|'os').`);
 }
 
-// Each provider needs different credentials. Validate the one we'll actually
-// use so the failure is a clear message instead of a mid-run API error.
-function checkProviderCredentials(provider) {
-  if (provider === 'openai' && !process.env.OPENAI_API_KEY) {
-    return 'OPENAI_API_KEY is not set (required for --provider openai)';
-  }
-  if (provider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
-    return 'ANTHROPIC_API_KEY is not set (required for --provider anthropic)';
-  }
-  // ollama needs no key — just a reachable local server, checked at call time.
-  return null;
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.task) {
@@ -126,10 +114,18 @@ async function main() {
   // Final config: DEFAULTS < file < env (all from loadConfig) < CLI flags.
   const config = deepMerge(loadConfig(), args.override);
 
-  const credError = checkProviderCredentials(config.provider);
-  if (credError) {
-    console.error(`error: ${credError}`);
-    process.exit(2);
+  // Preflight gets the environment ready (and launches Chrome). Its errors are
+  // user-facing setup guidance, so print them plainly without a stack trace.
+  if (!args.noPreflight) {
+    try {
+      await preflight({ config, port: 9222, verbose: args.verbose });
+    } catch (err) {
+      if (err instanceof PreflightError) {
+        console.error(err.message);
+        process.exit(2);
+      }
+      throw err;
+    }
   }
 
   let session;

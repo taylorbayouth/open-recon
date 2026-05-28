@@ -21,6 +21,7 @@
 //   { "id": "<corr>", "op": "scroll", "dx": 0, "dy": -120 }
 //   { "id": "<corr>", "op": "pos" }                          // returns cursor
 //   { "id": "<corr>", "op": "ping" }
+//   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
 //
 // Response shape:
 //   { "id": "<corr>", "ok": true,  "data": { ... } }
@@ -249,6 +250,11 @@ func handle(_ cmd: [String: Any]) {
     switch op {
     case "ping":
         ok(id, ["pong": true])
+
+    case "axtrusted":
+        // Reports whether this process holds Accessibility permission. Without
+        // it, CGEvent posting silently no-ops, so setup probes this up front.
+        ok(id, ["trusted": AXIsProcessTrusted()])
 
     case "pos":
         let p = currentMousePos()
