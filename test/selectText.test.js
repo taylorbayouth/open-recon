@@ -41,12 +41,16 @@ const FIXTURE = `<!doctype html>
   #spacer  { height: 1500px; }
   #below   { margin: 60px; }
   #inp     { margin: 60px; width: 320px; font-size: 16px; }
+  #farbtn  { margin: 60px; }
 </style></head><body>
   <h1 id="heading">Turing Machine</h1>
   <p id="para">The quick brown fox jumps over the lazy dog and then keeps running far enough that this paragraph must wrap across several visual lines for the test.</p>
   <div id="spacer"></div>
   <h2 id="below">Below The Fold Heading</h2>
   <input id="inp" value="SelectableInputText">
+  <div style="height: 1500px"></div>
+  <button id="farbtn">Far Down Button</button>
+  <script>document.getElementById('farbtn').addEventListener('click', () => { window.__btnClicked = true; });</script>
 </body></html>`;
 
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -166,6 +170,22 @@ function findText(brief, name) {
       const node = findText(brief, 'Below The Fold Heading');
       await cdp.selectText({ session, brief, ref: node.ref });
       assert.strictEqual(norm(await getSelectionText(session)), 'Below The Fold Heading');
+    });
+
+    // Last — reloads to reset scroll to the top.
+    await testAsync('click scrolls an off-viewport target into view first', async () => {
+      await session.client.Page.navigate({ url: fixtureUrl });
+      await new Promise(r => setTimeout(r, 700));
+      await session.client.Runtime.evaluate({ expression: 'window.__btnClicked = false' });
+      // Unfiltered extract so the bottom button is in the brief with its center
+      // far below the fold — exactly the case that drove the cursor off-page.
+      const brief = await session.extract({ format: 'lean', inViewportOnly: false });
+      const btn = (brief.elements || []).find(e => norm(e.name) === 'Far Down Button');
+      assert.ok(btn, 'far-down button not found in brief');
+      await cdp.click({ session, brief, ref: btn.ref });
+      await new Promise(r => setTimeout(r, 200));
+      const { result } = await session.client.Runtime.evaluate({ expression: '!!window.__btnClicked', returnByValue: true });
+      assert.ok(result.value, 'button was not clicked — scroll-into-view failed');
     });
 
   } finally {
