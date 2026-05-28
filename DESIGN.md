@@ -352,38 +352,52 @@ Loop is the only stateful module. Everything else is pure.
 ### The loop body
 
 ```
-1. snapshot  = extract(session)
-2. llmView   = reduce(snapshot, history)
-3. completion = plan({ system, tools, messages: [ ...history, llmView ], provider, model })
+1. snapshot  = extract(session)            // polls while unchanged (no-change short-circuit)
+2. llmView   = reduce(snapshot)
+3. completion = plan({ system, tools, messages: [ turnMessage(task, events, llmView) ], provider, model })
 4. actions   = validate(completion.actions, snapshot.lookup, registry)
 5. for each action:
      observation = execute(action, session)   // settles internally
      steps.push({ action, observation })
+     events.push(describe(action, observation))   // compact memory; see § Memory below
      if action.verb === "done" → exit "completed"
 6. goto 1
 ```
 
-### Message conversion
+### Memory: event log, not transcript
 
-Loop is responsible for converting each Step into messages for the next Plan call. The provider-agnostic message shape:
+The model is stateless across Plan calls, so each turn must carry the agent's progress. The naive approach — replay the full transcript (every past `LLMView` snapshot + each `tool_use`/`tool_result`) — grows **quadratically**: turn *N* re-sends *N* snapshots, so a 30-step run bills ~N²/2 listings.
 
-```js
-[
-  { role: "system",    content: "<system prompt>" },     // sent once, cacheable
-  { role: "user",      content: "<task description>" },
-  { role: "assistant", content: [ { type: "tool_use", name: "click", input: {...} } ] },
-  { role: "user",      content: [ { type: "tool_result", content: "ok" } ] },
-  // … repeats per step …
-  { role: "user",      content: "<latest LLMView listing>" },
-]
+Instead, Loop keeps a compact, deterministic **event log** of what *happened* and rebuilds a single user message each turn from `[ task, event log, current page ]`:
+
+```
+Task: <task description>
+
+What you've done so far:
+  1. typed "ada@example.com" into "Email"
+  2. typed "hunter2" into "Password"
+  3. clicked "Sign in"
+  4. page navigated to https://acme.test/dashboard
+  5. ✗ clicked "Forgot password?" — rejected: <reason>
+
+Current page (1280x800) — the [@e…] refs below are valid only for this snapshot:
+<latest LLMView listing>
+
+Choose the single best next action, or emit "done" when the task is complete.
 ```
 
-Providers translate this generic shape into their native API. The shape supports tool-use natively (Anthropic) but degrades cleanly to text-based protocols (Ollama) inside each provider adapter.
+Each Plan call is therefore just `{ system, tools, messages: [ <one user message> ] }`:
+
+- **Linear, not quadratic.** Only the current page is ever shown in full; old snapshots collapse to one event line each. The system prompt + tool defs remain the stable, cacheable prefix.
+- **Provider-agnostic with no pairing.** Because no `tool_use`/`tool_result` blocks are replayed, there is no `tool_use_id` to thread and no role-alternation constraint — every provider gets a single user turn.
+- **Derived, not summarized by a model.** The log comes straight from the Steps the loop already records (`describeAction` resolves a ref to its element name) plus URL deltas, so it costs no extra LLM call and can't hallucinate state.
+
+The known limitation: an event log captures actions, navigations, and errors, but not arbitrary page text that appeared and then vanished. A future `note`/`extract` verb would let the model deliberately persist a fact into the log.
 
 ### Failure handling
 
-- A failed Observation is included in history exactly like a successful one. The LLM sees the error and decides what to do next. **Loop never retries automatically.**
-- Validate failures (LLM emitted a ref not in lookup, an unknown verb, malformed args) feed the error string back into the next turn's message history the same way. The LLM gets a chance to correct.
+- A failed Observation is recorded as an event (`… — FAILED: <error>`) so the LLM sees it and decides what to do next. **Loop never retries automatically.**
+- Validate failures (LLM emitted a ref not in lookup, an unknown verb, malformed args) are recorded as rejected-action events (`✗ … — rejected: <error>`), so the next turn the LLM sees what it tried and why it was refused.
 - Infrastructure errors (lost CDP connection, provider returned non-JSON, settle timed out 3x in a row) abort with status `failed`.
 
 ### Abort conditions

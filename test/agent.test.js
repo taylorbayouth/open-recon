@@ -76,12 +76,16 @@ function makeFakeSession(briefQueue) {
   };
 }
 
+// Returns the array of `req` objects the loop sent, so tests can inspect the
+// exact prompt assembled each turn.
 function installFakeProvider(turns) {
   let i = 0;
+  const requests = [];
   planMod.providers.fake = {
     name: 'fake',
     defaultModel: 'fake-1',
-    async plan() {
+    async plan(req) {
+      requests.push(req);
       const actions = turns[Math.min(i, turns.length - 1)];
       i++;
       return {
@@ -90,6 +94,7 @@ function installFakeProvider(turns) {
       };
     },
   };
+  return requests;
 }
 
 let tuSeq = 0;
@@ -331,6 +336,75 @@ async function loopSuite() {
   });
 }
 
+async function memorySuite() {
+  console.log('\nmemory (event log):');
+
+  await test('prompt carries the event log + current page, not a transcript', async () => {
+    const reqs = installFakeProvider([
+      [action('type', { ref: '@e1', args: { text: 'hello' } })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({ session, task: 'find hello', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+
+    // turn 1: exactly one user message, no replayed assistant turns
+    assert.strictEqual(reqs[0].messages.length, 1);
+    assert.strictEqual(reqs[0].messages[0].role, 'user');
+    const t1 = reqs[0].messages[0].content;
+    assert.ok(t1.includes('find hello'), 'task present');
+    assert.match(t1, /nothing yet/, 'empty progress on first turn');
+    assert.ok(t1.includes('@e1'), 'current page listing present');
+
+    // turn 2: progress now records the type; still one user message, no replay
+    assert.strictEqual(reqs[1].messages.length, 1);
+    assert.ok(!reqs[1].messages.some(m => m.role === 'assistant'), 'no transcript replay');
+    assert.match(reqs[1].messages[0].content, /typed "hello" into "Search"/);
+  });
+
+  await test('only the current page is included, not prior snapshots', async () => {
+    const reqs = installFakeProvider([
+      [action('scroll', { args: { direction: 'down' } })],  // event has no ref
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    await run({ session, task: 'x', config: baseConfig() });
+    // '@e1' lives only in the page listing; it must appear once in turn 2's
+    // prompt (current page), not twice (current + a replayed prior snapshot).
+    const t2 = reqs[1].messages[0].content;
+    assert.strictEqual((t2.match(/@e1/g) || []).length, 1, 'no accumulated snapshots');
+  });
+
+  await test('navigation between turns is recorded as an event', async () => {
+    const reqs = installFakeProvider([
+      [action('click', { ref: '@e1' })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([
+      makeBrief({ url: 'http://example.test/a' }),
+      makeBrief({ url: 'http://example.test/b' }),
+    ]);
+    const r = await run({ session, task: 'go', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const t2 = reqs[1].messages[0].content;
+    assert.match(t2, /navigated to http:\/\/example\.test\/b/);
+    assert.match(t2, /clicked "Search"/);
+  });
+
+  await test('a rejected action is recorded with its reason', async () => {
+    const reqs = installFakeProvider([
+      [action('click', { ref: '@t1' })],   // @t is not a click target
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const t2 = reqs[1].messages[0].content;
+    assert.match(t2, /rejected:/);
+    assert.match(t2, /clicked "Welcome"/);   // @t1's name is "Welcome"
+  });
+}
+
 // ─── main ────────────────────────────────────────────────────────────────────
 
 (async () => {
@@ -338,6 +412,7 @@ async function loopSuite() {
   await validateSuite();
   await executeSuite();
   await loopSuite();
+  await memorySuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
 })();
