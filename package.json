@@ -10,16 +10,25 @@
   "scripts": {
     "launch": "node launch.js",
     "extract": "node cli.js --tree --pretty",
+    "agent": "node agent.js",
     "test": "node test/test.js"
   },
   "keywords": [
-    "cdp", "chrome", "devtools", "accessibility", "dom", "scraping",
-    "browser-automation", "llm", "agent"
+    "cdp",
+    "chrome",
+    "devtools",
+    "accessibility",
+    "dom",
+    "scraping",
+    "browser-automation",
+    "llm",
+    "agent"
   ],
   "author": "",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
     "chrome-remote-interface": "^0.34.0"
   }
 }
