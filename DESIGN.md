@@ -73,7 +73,9 @@ What actually goes into the prompt. No `lookup` (executor-only). Deterministic o
   "kind": "llm-view",
   "version": "1.0",
   "briefHash": "<refers back to source Brief>",
-  "viewport": { "width": …, "height": … },
+  "url": "https://example.com/page",
+  "title": "Page title",
+  "viewport": { "width": …, "height": …, "scrollY": …, "contentHeight": … },
   "listing": "[@t1]  heading  \"Sign in\"  (390,118)\n[@t2]  label  \"Email\"  (270,168)\n[@e1]  textbox  \"Email\"  (390,196)\n…"
 }
 ```

@@ -142,6 +142,18 @@ async function reduceSuite() {
     assert.ok(!/\(\d+,\d+\)/.test(v.listing), 'no coords expected');
   });
 
+  await test('marks the focused element and carries url/title', () => {
+    const brief = makeBrief({
+      url: 'http://example.test/x',
+      title: 'X',
+      elements: [{ ref: '@e1', role: 'textbox', name: 'Search', bbox: [100, 200, 300, 40], focused: true }],
+    });
+    const v = reduce(brief, {});
+    assert.match(v.listing, /\(focused\)/, 'focused marker present');
+    assert.strictEqual(v.url, 'http://example.test/x');
+    assert.strictEqual(v.title, 'X');
+  });
+
   await test('dedupeText collapses consecutive identical text', () => {
     const brief = makeBrief({
       elements: [],
@@ -430,6 +442,21 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'stuck', r.error);
     // click executes twice; the 3rd identical pick (with no page change) aborts.
     assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('turn message carries URL (fragment stripped), title, and scroll position', async () => {
+    const reqs = installFakeProvider([[action('done', { args: {} })]]);
+    const brief = makeBrief({
+      url: 'http://example.test/feed#tracking=abc123',
+      title: 'My Feed',
+      viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 400, contentHeight: 2400 },
+    });
+    await run({ session: makeFakeSession([brief]), task: 'x', config: baseConfig() });
+    const msg = reqs[0].messages[0].content;
+    assert.ok(msg.includes('URL: http://example.test/feed'), 'url present');
+    assert.ok(!msg.includes('tracking=abc123'), 'fragment stripped');
+    assert.ok(msg.includes('Title: My Feed'), 'title present');
+    assert.match(msg, /scrolled 400\/2400px/, 'scroll position present');
   });
 
   await test('repeating an action does NOT abort when the page keeps changing', async () => {

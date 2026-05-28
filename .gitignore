@@ -1,6 +1,7 @@
 node_modules/
 out.json
 *.log
+.DS_Store
 
 # Per-run agent logs
 logs/
