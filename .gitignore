@@ -2,5 +2,10 @@ node_modules/
 out.json
 *.log
 
+# Secrets — provider API keys live here
+.env
+.env.*
+!.env.example
+
 # Built native binary — per-platform, rebuild via native/macos/recon-input/build.sh
 native/macos/recon-input/bin/
