@@ -35,7 +35,21 @@ child.stdout.on('data', (chunk) => {
   }
 });
 
-console.log('Hover the target element. Ctrl+C to stop.\n');
-setInterval(() => {
-  child.stdin.write(JSON.stringify({ id: String(++seq), op: 'pos' }) + '\n');
-}, 500);
+const argX = process.argv[2] != null ? Number(process.argv[2]) : null;
+const argY = process.argv[3] != null ? Number(process.argv[3]) : null;
+
+if (argX != null && argY != null) {
+  // Write-path test: move the cursor to a known monitor coordinate, then read
+  // back where it actually ended up. Watch the physical cursor too.
+  console.log(`Moving cursor to monitor (${argX}, ${argY})…`);
+  child.stdin.write(JSON.stringify({ id: String(++seq), op: 'move', x: argX, y: argY, speedPxPerSec: 1e9, jitterPx: 0 }) + '\n');
+  setTimeout(() => {
+    child.stdin.write(JSON.stringify({ id: String(++seq), op: 'pos' }) + '\n');
+  }, 400);
+  setTimeout(() => process.exit(0), 1200);
+} else {
+  console.log('Hover the target element. Ctrl+C to stop.\n');
+  setInterval(() => {
+    child.stdin.write(JSON.stringify({ id: String(++seq), op: 'pos' }) + '\n');
+  }, 500);
+}
