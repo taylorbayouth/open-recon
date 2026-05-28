@@ -2,6 +2,9 @@ node_modules/
 out.json
 *.log
 
+# Per-run agent logs
+logs/
+
 # Secrets — provider API keys live here
 .env
 .env.*
