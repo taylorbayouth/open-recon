@@ -1050,6 +1050,39 @@ async function loopSuite() {
   });
 }
 
+async function linkPatchSuite() {
+  console.log('\nlink targeting (collapse new tabs):');
+  const { Session } = require('../lib/connect');
+  const mkClient = (calls) => ({
+    Accessibility: { enable: async () => {} },
+    Page: {
+      enable: async () => {},
+      addScriptToEvaluateOnNewDocument: async (a) => { calls.push(['addScript', a.source]); },
+    },
+    Runtime: { evaluate: async (a) => { calls.push(['eval', a.expression]); } },
+  });
+
+  await test('installs a capture-phase target→_self patch when collapseNewTabs is on', async () => {
+    const calls = [];
+    const s = new Session(mkClient(calls), { id: 'T' }, { collapseNewTabs: true });
+    await s._ensureLinkTargetingPatch();
+    await s._ensureLinkTargetingPatch();  // must be idempotent per client
+    const added = calls.filter(c => c[0] === 'addScript');
+    assert.strictEqual(added.length, 1, 'armed future docs exactly once');
+    assert.match(added[0][1], /addEventListener\('click'/);
+    assert.match(added[0][1], /, true\)/);   // capture phase
+    assert.match(added[0][1], /_self/);      // rewrites the target
+    assert.ok(calls.some(c => c[0] === 'eval'), 'also patches the already-loaded document');
+  });
+
+  await test('does nothing when collapseNewTabs is off', async () => {
+    const calls = [];
+    const s = new Session(mkClient(calls), { id: 'T' }, {});
+    await s._ensureLinkTargetingPatch();
+    assert.strictEqual(calls.length, 0);
+  });
+}
+
 async function backSuite() {
   console.log('\nback + history:');
   const cdp = require('../lib/executors/cdp');
@@ -1377,6 +1410,7 @@ async function postJSONSuite() {
   await tokenSuite();
   await loopSuite();
   await backSuite();
+  await linkPatchSuite();
   await memorySuite();
   await providerTranslationSuite();
   await cacheSuite();
