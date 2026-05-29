@@ -5,7 +5,7 @@
   <title>dom-agent fixture</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.5; background: #fff; }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 220px 24px 0; color: #1a1a1a; line-height: 1.5; background: #fff; }
     nav { display: flex; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #e5e5e5; margin-bottom: 32px; }
     nav a { text-decoration: none; color: #0066cc; font-size: 0.9rem; }
     nav a:hover { text-decoration: underline; }
@@ -16,8 +16,13 @@
     label { font-size: 0.875rem; font-weight: 500; color: #444; }
     input[type="email"],
     input[type="password"],
-    input[type="search"] { padding: 8px 10px; font-size: 0.95rem; border: 1px solid #ccc; border-radius: 6px; width: 100%; }
-    input:focus { outline: 2px solid #0066cc; outline-offset: 1px; }
+    input[type="search"],
+    input[type="text"],
+    input[type="url"],
+    input[type="number"],
+    textarea,
+    select { padding: 8px 10px; font-size: 0.95rem; border: 1px solid #ccc; border-radius: 6px; width: 100%; }
+    input:focus, textarea:focus, select:focus, [contenteditable]:focus { outline: 2px solid #0066cc; outline-offset: 1px; }
     button { padding: 8px 16px; font-size: 0.95rem; border: none; border-radius: 6px; cursor: pointer; }
     button[type="submit"], button.primary { background: #0066cc; color: #fff; }
     button[type="button"] { background: #f0f0f0; color: #1a1a1a; }
@@ -29,11 +34,38 @@
     a.inline { color: #0066cc; font-size: 0.875rem; }
     footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #e5e5e5; display: flex; gap: 20px; }
     footer a { color: #888; font-size: 0.8rem; text-decoration: none; }
+    details { border: 1px solid #ddd; border-radius: 6px; padding: 12px 14px; }
+    summary { cursor: pointer; font-weight: 600; }
+    textarea { min-height: 90px; resize: vertical; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .panel { border: 1px solid #ddd; border-radius: 6px; padding: 14px; background: #fafafa; }
+    .visual-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+    .crop-target { display: block; width: 100%; min-height: 180px; border: 1px solid #bbb; border-radius: 6px; background: #fff; }
+    .image-target { height: 180px; object-fit: cover; }
+    .fixture-frame { width: 100%; height: 210px; border: 1px solid #999; border-radius: 6px; background: #fff; }
+    .frame-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .data-table-wrap { max-height: 260px; overflow: auto; border: 1px solid #ddd; border-radius: 6px; }
+    .data-table { width: 900px; border-collapse: collapse; font-size: 0.875rem; }
+    .data-table th, .data-table td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; white-space: nowrap; }
+    .data-table th { position: sticky; top: 0; background: #f8f8f8; z-index: 1; }
+    .scroll-box { height: 170px; overflow: auto; border: 1px solid #ddd; border-radius: 6px; padding: 10px; }
+    .status-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e8f3ff; color: #003b73; font-size: 0.75rem; }
+    .icon-button { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #ccc; background: #fff; }
+    .transform-target { transform: rotate(-2deg) translateX(8px); transform-origin: left center; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .shadow-host { min-height: 110px; border: 1px dashed #999; border-radius: 6px; padding: 12px; background: #fcfcfc; }
+    .spacer { height: 520px; border-left: 3px solid #eee; padding-left: 16px; color: #666; }
 
     /* CSS visibility test cases — distinctly named so tests can assert absence */
     .test-hidden-visibility { visibility: hidden; }
     .test-hidden-opacity    { opacity: 0; }
     .test-no-pointer-events { pointer-events: none; }
+
+    @media (max-width: 720px) {
+      .grid,
+      .visual-row,
+      .frame-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -119,12 +151,220 @@
               style="position:fixed; left:40px; top:50px; width:160px; height:90px; background:#9cf;"></canvas>
     </section>
 
+    <section aria-label="Visual crop targets">
+      <h2>Visual crop targets</h2>
+      <div class="visual-row">
+        <div>
+          <p>Unnamed SVG with embedded labels. It should surface as an unreadable graphic region.</p>
+          <svg id="nameless-svg-crop" class="crop-target" viewBox="0 0 420 220" role="img">
+            <defs>
+              <clipPath id="plot-clip"><rect x="48" y="28" width="330" height="130"></rect></clipPath>
+              <linearGradient id="svg-fill" x1="0" x2="1">
+                <stop offset="0" stop-color="#e9f5ff"></stop>
+                <stop offset="1" stop-color="#fff7d6"></stop>
+              </linearGradient>
+            </defs>
+            <rect x="0" y="0" width="420" height="220" fill="url(#svg-fill)"></rect>
+            <g stroke="#d6d6d6" stroke-width="1">
+              <line x1="48" y1="158" x2="378" y2="158"></line>
+              <line x1="48" y1="118" x2="378" y2="118"></line>
+              <line x1="48" y1="78" x2="378" y2="78"></line>
+              <line x1="48" y1="38" x2="378" y2="38"></line>
+            </g>
+            <g clip-path="url(#plot-clip)" fill="none" stroke-width="6" stroke-linecap="round">
+              <polyline points="52,144 112,126 172,92 232,106 292,58 374,42" stroke="#0066cc"></polyline>
+              <polyline points="52,156 112,149 172,132 232,118 292,96 374,88" stroke="#c2410c"></polyline>
+            </g>
+            <g font-family="system-ui, sans-serif" fill="#1a1a1a">
+              <text x="28" y="24" font-size="13">crop me: SVG target</text>
+              <text x="60" y="194" font-size="18" font-weight="700">SVG CROP TARGET: Q4 73%</text>
+            </g>
+          </svg>
+        </div>
+        <div>
+          <p>Nameless inline image. It has no alt attribute, so region detection should flag it.</p>
+          <img id="nameless-img-crop" class="crop-target image-target"
+               src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 180'%3E%3Crect width='360' height='180' fill='%23f6d55c'/%3E%3Ccircle cx='300' cy='42' r='28' fill='%230066cc'/%3E%3Cpath d='M0 150 C80 96 132 180 210 118 S304 70 360 110 L360 180 L0 180 Z' fill='%23ffffff' opacity='.75'/%3E%3Ctext x='24' y='74' font-size='28' font-family='Arial' font-weight='700' fill='%23111'%3ENameless image%3C/text%3E%3Ctext x='24' y='118' font-size='20' font-family='Arial' fill='%23111'%3ECrop should read this%3C/text%3E%3C/svg%3E">
+        </div>
+      </div>
+      <div class="grid" style="margin-top:16px;">
+        <button type="button" class="icon-button">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M12 5V2L7 7l5 5V9a4 4 0 1 1-4 4H5a7 7 0 1 0 7-8z"></path>
+          </svg>
+          Refresh icon inside button
+        </button>
+        <svg aria-label="Named status sparkline" viewBox="0 0 280 80" class="crop-target" style="min-height:80px;">
+          <rect width="280" height="80" fill="#edf7ed"></rect>
+          <polyline points="12,64 58,38 104,44 150,22 196,30 244,12" fill="none" stroke="#247a3b" stroke-width="5"></polyline>
+        </svg>
+      </div>
+    </section>
+
+    <section aria-label="Iframe fixtures">
+      <h2>Iframe fixtures</h2>
+      <div class="frame-grid">
+        <iframe id="same-origin-frame" class="fixture-frame" title="Same-origin checkout frame"
+                srcdoc='<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body{font:14px system-ui,sans-serif;margin:16px;color:#1a1a1a}label,input,button{display:block;margin-top:8px}input{width:90%;padding:6px;border:1px solid #aaa;border-radius:4px}button{padding:7px 10px;background:#0066cc;color:white;border:0;border-radius:4px}.badge{display:inline-block;background:#e8f3ff;padding:2px 6px;border-radius:999px}</style></head><body><h3>Same-origin frame</h3><p class="badge">content should be readable</p><label for="frame-email">Frame email</label><input id="frame-email" value="frame@example.test"><button>Frame submit</button></body></html>'></iframe>
+        <iframe id="sandboxed-frame" class="fixture-frame" title="Sandboxed opaque crop frame" sandbox
+                srcdoc='<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body{font:14px system-ui,sans-serif;margin:0;background:#111827;color:white}.hero{padding:20px;background:linear-gradient(135deg,#111827,#0f766e)}.card{margin:14px;padding:12px;border:1px solid rgba(255,255,255,.35);border-radius:8px;background:rgba(255,255,255,.12)}strong{font-size:24px;color:#fde68a}</style></head><body><div class="hero"><h3>Sandbox iframe</h3><p>Opaque origin crop target</p></div><div class="card"><strong>IFRAME CROP: 42B</strong><p>This text is here for screenshot OCR.</p></div></body></html>'></iframe>
+        <iframe id="external-frame" class="fixture-frame" title="External example frame"
+                loading="lazy" referrerpolicy="no-referrer" src="https://example.com/"></iframe>
+      </div>
+    </section>
+
+    <section aria-label="Form and widget edge cases">
+      <h2>Form and widget edge cases</h2>
+      <form aria-label="Complex profile form">
+        <div class="grid">
+          <div>
+            <label for="profile-name">Profile name</label>
+            <input id="profile-name" type="text" value="Ada Lovelace">
+          </div>
+          <div>
+            <label for="profile-url">Profile URL</label>
+            <input id="profile-url" type="url" placeholder="https://example.test/profile">
+          </div>
+          <div>
+            <label for="plan">Plan</label>
+            <select id="plan">
+              <option>Starter</option>
+              <option selected>Pro</option>
+              <option>Enterprise</option>
+            </select>
+          </div>
+          <div>
+            <label for="quantity">Seats</label>
+            <input id="quantity" type="number" min="1" max="99" value="7">
+          </div>
+        </div>
+        <label for="notes">Notes</label>
+        <textarea id="notes">This textarea is intentionally multi-line for selection and cropping tests.</textarea>
+        <label for="completion">Completion</label>
+        <input id="completion" type="range" min="0" max="100" value="68">
+        <label for="city-choice">City</label>
+        <input id="city-choice" list="cities" value="Portland">
+        <datalist id="cities">
+          <option value="Portland"></option>
+          <option value="Austin"></option>
+          <option value="Raleigh"></option>
+        </datalist>
+      </form>
+      <div class="grid" style="margin-top:14px;">
+        <div class="panel transform-target" role="button" tabindex="0" aria-label="Transformed custom action">
+          Transformed custom action
+        </div>
+        <div class="panel" contenteditable="true" aria-label="Editable rich text">Editable region with inline text.</div>
+        <div class="panel" aria-disabled="true" role="button" tabindex="0">ARIA disabled custom button</div>
+        <div class="panel" inert>
+          <button type="button">Inert nested action</button>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Scrollable table and clipped content">
+      <h2>Scrollable table and clipped content</h2>
+      <div class="data-table-wrap" tabindex="0" aria-label="Scrollable metrics table">
+        <table class="data-table">
+          <caption>Wide metrics table</caption>
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Status</th>
+              <th>Owner</th>
+              <th>Risk</th>
+              <th>Last contact</th>
+              <th>Next action</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Northwind</td><td><span class="status-pill">Active</span></td><td>Mina</td><td>Low</td><td>May 12</td><td><button type="button">Review Northwind</button></td><td>Has a long clipped note that forces horizontal scrolling.</td></tr>
+            <tr><td>Contoso</td><td><span class="status-pill">Blocked</span></td><td>Ravi</td><td>High</td><td>May 18</td><td><button type="button">Escalate Contoso</button></td><td>Button is inside a horizontally scrollable table.</td></tr>
+            <tr><td>Fabrikam</td><td><span class="status-pill">Pending</span></td><td>Jo</td><td>Medium</td><td>May 21</td><td><button type="button">Open Fabrikam</button></td><td>Tests sticky headers and table semantics.</td></tr>
+            <tr><td>Globex</td><td><span class="status-pill">Active</span></td><td>Sam</td><td>Low</td><td>May 23</td><td><button type="button">Open Globex</button></td><td>Extra row for scroll density.</td></tr>
+            <tr><td>Initech</td><td><span class="status-pill">Paused</span></td><td>Lee</td><td>Medium</td><td>May 25</td><td><button type="button">Open Initech</button></td><td>Extra row for scroll density.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="scroll-box" tabindex="0" aria-label="Scrollable activity log" style="margin-top:14px;">
+        <p>Activity item 1: visible at the top of an overflow container.</p>
+        <p>Activity item 2: visible before inner scrolling.</p>
+        <p>Activity item 3: visible before inner scrolling.</p>
+        <p>Activity item 4: lower in the same scroll container.</p>
+        <p>Activity item 5: lower in the same scroll container.</p>
+        <p>Activity item 6: lower in the same scroll container.</p>
+        <button type="button">Inner scroll action</button>
+      </div>
+    </section>
+
+    <section aria-label="Details and hidden content">
+      <h2>Details and hidden content</h2>
+      <details open>
+        <summary>Open disclosure</summary>
+        <p>Visible disclosure text with a nested <a href="/nested-link">nested link</a>.</p>
+      </details>
+      <details style="margin-top:12px;">
+        <summary>Closed disclosure</summary>
+        <button type="button">Hidden until opened</button>
+      </details>
+      <p class="visually-hidden">Visually hidden helper text should remain available to accessibility APIs.</p>
+      <template>
+        <button type="button">Template action should not render</button>
+      </template>
+    </section>
+
+    <section aria-label="Shadow DOM fixture">
+      <h2>Shadow DOM fixture</h2>
+      <div id="shadow-host" class="shadow-host">Shadow DOM did not attach.</div>
+    </section>
+
+    <section aria-label="Below the fold visual">
+      <h2>Below the fold visual</h2>
+      <div class="spacer">Scroll spacer before the next crop target.</div>
+      <canvas id="below-fold-canvas" class="crop-target" width="520" height="220"></canvas>
+    </section>
+
   </main>
 
   <footer>
     <a href="/privacy">Privacy</a>
     <a href="/terms">Terms</a>
   </footer>
+
+  <script>
+    (function () {
+      function drawCanvas(id, label, color) {
+        var canvas = document.getElementById(id);
+        if (!canvas || !canvas.getContext) return;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(255,255,255,.8)';
+        ctx.fillRect(12, 14, canvas.width - 24, 56);
+        ctx.fillStyle = '#111';
+        ctx.font = '700 18px system-ui, sans-serif';
+        ctx.fillText(label, 22, 48);
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(24, canvas.height - 34);
+        ctx.lineTo(canvas.width * .35, canvas.height - 76);
+        ctx.lineTo(canvas.width * .56, canvas.height - 52);
+        ctx.lineTo(canvas.width - 30, canvas.height - 110);
+        ctx.stroke();
+      }
+
+      drawCanvas('display-test-canvas', 'CANVAS 2X CROP', '#99ccff');
+      drawCanvas('below-fold-canvas', 'BELOW FOLD CANVAS CROP', '#d9f99d');
+
+      var host = document.getElementById('shadow-host');
+      if (host && host.attachShadow) {
+        var root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<style>:host{display:block}button,input{font:14px system-ui,sans-serif;margin-top:8px;padding:7px 10px}.wrap{border:1px solid #bbb;border-radius:6px;padding:10px;background:white}</style><div class="wrap"><h3>Open shadow root</h3><label for="shadow-input">Shadow input</label><input id="shadow-input" value="inside shadow"><button type="button">Shadow button</button></div>';
+      }
+    }());
+  </script>
 
 </body>
 </html>
