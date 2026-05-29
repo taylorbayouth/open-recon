@@ -154,7 +154,7 @@ async function main() {
 
   let session;
   try {
-    session = await connect({ port: 9222 });
+    session = await connect({ port: 9222, collapseNewTabs: config.collapseNewTabs });
     const runArtifact = await run({ session, task: args.task, config, verbose: args.verbose });
     process.stdout.write((runArtifact.report || JSON.stringify(runArtifact, null, 2)) + '\n');
     process.exitCode = runArtifact.status === 'completed' ? 0 : 1;
