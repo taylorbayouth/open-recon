@@ -259,6 +259,8 @@ Switch with `--provider anthropic` or `OPEN_RECON_PROVIDER=anthropic`.
 {
   "provider": "openai",
   "model": null,                  // null → provider default
+  "context": null,                // optional trusted background (user info, prefs);
+                                  // null → no Context section in the prompt
 
   "loop": {
     "maxSteps": 30,

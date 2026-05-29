@@ -317,6 +317,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 |---|---|---|
 | `provider` | `openai` | LLM provider (also `OPEN_RECON_PROVIDER`). |
 | `model` | `null` | `null` → provider's own default. |
+| `context` | `null` | Optional trusted background (user info, prefs) appended to the system prompt (also `OPEN_RECON_CONTEXT`, `--context`/`-c`). `null` → no Context section. |
 | `loop.maxSteps` | `30` | Hard cap on LLM turns. |
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
@@ -491,11 +492,13 @@ Each provider's `plan()` translates these generic tool defs into its native form
 const prompt = require('./prompt');
 const actions = require('./actions');
 
-const system = prompt.buildSystemPrompt(actions);
-// → "You are a browser agent. Available actions: …"
+const system = prompt.buildSystemPrompt(actions, config.context);
+// → "You are a browser agent. Available actions: …\n\nContext (trusted …): …"
 ```
 
 The system prompt is built once per Run, kept in `Run.system` (optional, for debugging), and sent as the first message of every Plan call.
+
+**Optional context.** `config.context` (also `OPEN_RECON_CONTEXT` / `--context`) is operator-supplied background — who the user is, preferences — and is *authoritative*, unlike page text. It's appended as a labelled trusted block at the **very end** of the prompt, never spliced into the middle: the template + action list above it are byte-identical across runs and form the cacheable prefix (see *Caching seams*), so a per-run context value would invalidate the cache for everything after it if placed earlier. Keeping it last confines the variation to the tail. When `context` is null/empty the block — header included — is omitted entirely.
 
 ---
 

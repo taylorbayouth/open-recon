@@ -467,6 +467,26 @@ async function promptSuite() {
     assert.ok(prompt.includes('type[@e] (text: string)'), 'required args should be shown');
     assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
+
+  await test('context is omitted (no header) when null/empty', () => {
+    const reg = { click: registry.click, done: registry.done };
+    const base = buildSystemPrompt(reg);
+    assert.ok(!base.includes('Context ('), 'no context header when absent');
+    assert.strictEqual(buildSystemPrompt(reg, null), base, 'null → identical to no arg');
+    assert.strictEqual(buildSystemPrompt(reg, '   '), base, 'whitespace-only → omitted');
+  });
+
+  await test('context, when present, is appended as a trusted block at the very end', () => {
+    const reg = { click: registry.click, done: registry.done };
+    const base = buildSystemPrompt(reg);
+    const ctx = 'The user is Taylor; prefers concise replies.';
+    const withCtx = buildSystemPrompt(reg, ctx);
+    // The static template must remain an unmodified prefix, so providers can
+    // cache it across runs regardless of the per-run context value.
+    assert.ok(withCtx.startsWith(base), 'static template stays an intact prefix');
+    assert.ok(withCtx.endsWith(ctx), 'context sits at the very end (nothing cacheable after it)');
+    assert.ok(withCtx.includes('Context ('), 'trusted header is shown when present');
+  });
 }
 
 async function tokenSuite() {
