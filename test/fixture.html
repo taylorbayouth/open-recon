@@ -108,6 +108,17 @@
       <button class="test-no-pointer-events">CSS pointer events none button</button>
     </section>
 
+    <section aria-label="Unreadable graphic">
+      <h2>Chart</h2>
+      <!-- Known-geometry canvas for the HiDPI crop test: position:fixed pins it
+           to viewport coords (40,50) at 160×90 CSS px, independent of layout and
+           scroll, so the display test can assert extract returns CSS pixels (not
+           device pixels) and the crop clip maps correctly under a 2× display.
+           Also gives the region/crop path real end-to-end coverage. -->
+      <canvas id="display-test-canvas" width="160" height="90"
+              style="position:fixed; left:40px; top:50px; width:160px; height:90px; background:#9cf;"></canvas>
+    </section>
+
   </main>
 
   <footer>
