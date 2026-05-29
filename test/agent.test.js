@@ -20,7 +20,7 @@ const { loadConfig, deepMerge, DEFAULTS, ConfigError } = require('../lib/config'
 const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
-const { normalizeUrl, back, clickablePoint, assertHittable, bestQuadRect } = require('../lib/executors/page');
+const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/executors/page');
 const { createScratchpad } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
@@ -657,47 +657,72 @@ async function targetingSuite() {
     assert.strictEqual(pt.y, 220); // 200 + 40/2 - scroll(0)
   });
 
-  // A CDP client for assertHittable: getNodeForLocation reports the topmost
-  // backendNodeId; describeNode returns a (pierced) subtree keyed by id.
-  function hitSession({ topmostId, trees }) {
+  // A CDP client for the occlusion probe folded into clickablePoint: getContentQuads
+  // serves geometry, getNodeForLocation reports the topmost backendNodeId at a
+  // point, describeNode returns a (pierced) subtree keyed by id. topmostAt(x,y)
+  // lets a test vary the painted node by position — simulating a sibling that
+  // covers only PART of the target's quad.
+  function occlusionSession({ quads, layout, topmostAt, trees }) {
     return {
       client: {
         DOM: {
-          getNodeForLocation: async () => ({ backendNodeId: topmostId }),
+          enable: async () => {}, getDocument: async () => {}, scrollIntoViewIfNeeded: async () => {},
+          getContentQuads: async () => ({ quads }),
+          getNodeForLocation: async ({ x, y }) => ({ backendNodeId: topmostAt(x, y) }),
           describeNode: async ({ backendNodeId }) =>
             ({ node: trees[backendNodeId] || { backendNodeId, children: [] } }),
         },
+        Page: { getLayoutMetrics: async () => layout },
       },
     };
   }
-  const brief = makeBrief(); // @e1 → lookup 111
+  // One 100×40 quad at (10,10): center (60,30); quincunx corners at x∈{35,85}, y∈{20,40}.
+  const oneQuad = [10, 10, 110, 10, 110, 50, 10, 50];
 
-  await test('assertHittable passes when the aim point hits the target exactly', async () => {
-    const session = hitSession({ topmostId: 111, trees: {} });
-    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+  await test('clickablePoint returns the center when it hit-tests to the target', async () => {
+    const session = occlusionSession({ quads: [oneQuad], layout: layout1k, topmostAt: () => 111, trees: {} });
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.strictEqual(pt.x, 60);
+    assert.strictEqual(pt.y, 30);
   });
 
-  await test('assertHittable passes when the topmost node is a descendant of the target', async () => {
+  await test('clickablePoint accepts a descendant of the target as the hit', async () => {
     const trees = { 111: { backendNodeId: 111, children: [{ backendNodeId: 999, children: [] }] } };
-    const session = hitSession({ topmostId: 999, trees });
-    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+    const session = occlusionSession({ quads: [oneQuad], layout: layout1k, topmostAt: () => 999, trees });
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.strictEqual(pt.x, 60);   // 999 ∈ target subtree ⇒ center is accepted
+    assert.strictEqual(pt.y, 30);
   });
 
-  await test('assertHittable throws when an unrelated overlay covers the aim point', async () => {
+  await test('clickablePoint skips a covered center and clicks a clear corner', async () => {
+    // An overlay (222) paints over only the center; the rest of the quad is the target.
+    const trees = { 111: { backendNodeId: 111, children: [] }, 222: { backendNodeId: 222, children: [] } };
+    const topmostAt = (x, y) => (x === 60 && y === 30) ? 222 : 111;
+    const session = occlusionSession({ quads: [oneQuad], layout: layout1k, topmostAt, trees });
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.ok(!(pt.x === 60 && pt.y === 30), 'must not return the covered center');
+    assert.strictEqual(pt.x, 35);   // first quincunx corner that resolves to the target
+    assert.strictEqual(pt.y, 20);
+  });
+
+  await test('clickablePoint throws "covered" only when every candidate is covered', async () => {
     const trees = {
       111: { backendNodeId: 111, children: [] },                 // target subtree: no 222
       222: { backendNodeId: 222, nodeName: 'DIV', attributes: ['id', 'cookie-wall'], children: [] },
     };
-    const session = hitSession({ topmostId: 222, trees });
+    const session = occlusionSession({ quads: [oneQuad], layout: layout1k, topmostAt: () => 222, trees });
     await assert.rejects(
-      () => assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }),
+      () => clickablePoint({ session, brief: makeBrief(), ref: '@e1' }),
       /covered .*cookie-wall/
     );
   });
 
-  await test('assertHittable fails open when getNodeForLocation is unavailable', async () => {
-    const session = { client: { DOM: {} } };
-    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+  await test('clickablePoint fails open (best-quad center) when hit-testing is unavailable', async () => {
+    // Geometry present but no getNodeForLocation ⇒ aim at the center, no "covered".
+    const session = quadSession({ quads: [oneQuad], layout: layout1k });
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.strictEqual(pt.x, 60);
+    assert.strictEqual(pt.y, 30);
   });
 
   await test('cdp type clears the field by default (select-all before insertText)', async () => {
@@ -785,7 +810,6 @@ async function scratchpadSuite() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
     try {
       const scratch = createScratchpad({ enabled: false, dir, runId: 'x' });
-      scratch.append({ title: 'Ignored', text: 'Nope' });
       assert.strictEqual(scratch.saveText({ content: 'Nope' }), null);
       assert.strictEqual(scratch.saveImage({ base64: Buffer.from('x').toString('base64') }), null);
       assert.strictEqual(scratch.readMarkdown(), '');
@@ -995,6 +1019,19 @@ async function loopSuite() {
     };
     const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxStuckRepeats: 2 } }) });
     assert.strictEqual(r.status, 'completed', r.error);
+  });
+
+  await test('repeated REJECTED action (invalid ref) aborts as stuck, not max-steps', async () => {
+    // The model emits the same invalid action every turn (@e9 ∉ the snapshot's
+    // lookup). It validates to nothing — no observation, no step — so the only
+    // thing that can stop it is the stuck guard. Before the fix this ground all
+    // the way to max-steps; now the rejected primary is tracked as an errored
+    // target and sameErroredTarget aborts it.
+    installFakeProvider([[action('click', { ref: '@e9' })]]);
+    const session = makeFakeSession([makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxSteps: 20, maxStuckRepeats: 2 } }) });
+    assert.strictEqual(r.status, 'stuck', r.error);
+    assert.ok(r.stats.stepCount < 20, 'aborted well before max-steps');
   });
 
   await test('select_text reports the selected text and skips the no-change wait', async () => {
