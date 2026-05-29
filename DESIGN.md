@@ -198,7 +198,7 @@ The single source of truth for every verb. Validator, Executor, and Prompt all r
 module.exports = {
   click:    { requiresRef: true,  refType: ['e', 't'],  args: {} },
   focus:    { requiresRef: true,  refType: ['e'],       args: {} },
-  type:     { requiresRef: true,  refType: ['e'],       args: { text: 'string' } },
+  type:     { requiresRef: true,  refType: ['e'],       args: { text: 'string', clear: 'boolean?' } },
   press:    { requiresRef: false,                       args: { key: 'string' } },
   selectText:{ requiresRef: true,  refType: ['e', 't'],  args: {} },
   scroll:   { requiresRef: false,                       args: { direction: 'string', amount: 'number?' } },
@@ -218,9 +218,9 @@ Rules:
 
 | Verb | Effect | Notes |
 |---|---|---|
-| `click` | Mouse click at the resolved element's coordinates | Uses `Input.dispatchMouseEvent` (not `DOM.focus + click` — more reliable on custom widgets). |
+| `click` | Mouse click at the resolved element's hit-region | Aims at the element's real hit polygon (`DOM.getContentQuads`), clamped to the visible viewport, instead of the raw bbox center — robust to large containers and multi-line links. Falls back to the bbox center if quads are unavailable. Before pressing, `DOM.getNodeForLocation` verifies the aim point isn't covered by an unrelated overlay (modal, cookie wall); if it is, the click is refused with a non-fatal error so the loop can dismiss it. Fails open if verification can't run. |
 | `focus` | Focus the element | Useful before `type` on inputs that need explicit focus. |
-| `type` | Type the literal string into the element | Focuses first, then dispatches per-character `Input.dispatchKeyEvent`. |
+| `type` | Type the literal string into the element | Focuses first, then dispatches per-character input. Replaces the field's existing value by default (focus → select-all → type); pass `clear:false` to append. Clearing is gated to text-input roles, so a stray `clear` on a non-text element can't trigger a page-wide select-all. |
 | `press` | Send a single key (Enter, Tab, Escape, ArrowDown, …) | Top-level — does not target a ref. Useful for form submission. |
 | `selectText` | Highlight a node's full text | Targets `@e` or `@t`. Click-drag from the node's top-left to bottom-right corner (selects whole node, not a sub-phrase). |
 | `scroll` | Scroll the page | `direction: "up"|"down"`, optional `amount` in CSS pixels (default: one viewport). |
@@ -264,7 +264,7 @@ OS-level input via `CGEventPost` goes through the same kernel pipeline as a real
   async init() {},                          // boot resources (e.g., spawn helper)
   async close() {},                         // tear them down
   async click({ session, brief, ref }) {},  // one handler per verb in actions.js
-  async type({ session, brief, ref, text }) {},
+  async type({ session, brief, ref, text, clear }) {},
   // … one handler per non-terminal verb …
 }
 ```
