@@ -228,6 +228,7 @@ function makeSnapshot(nodeSpecs) {
   const intern = (s) => { let i = strings.indexOf(s); if (i < 0) { i = strings.length; strings.push(s); } return i; };
   const nodeName = [], parentIndex = [], backendNodeId = [], attributes = [];
   const layoutNodeIndex = [], bounds = [];
+  const cdIndex = [];   // contentDocumentIndex.index — iframes with an embedded (same-process) doc
   nodeSpecs.forEach((n, i) => {
     nodeName.push(intern(n.tag));
     parentIndex.push(n.parent ?? -1);
@@ -236,10 +237,14 @@ function makeSnapshot(nodeSpecs) {
     for (const [k, val] of Object.entries(n.attrs || {})) { flat.push(intern(k)); flat.push(intern(String(val))); }
     attributes.push(flat);
     if (n.bounds) { layoutNodeIndex.push(i); bounds.push(n.bounds); }
+    if (n.contentDoc) cdIndex.push(i);
   });
   return {
     strings,
-    documents: [{ nodes: { nodeName, parentIndex, backendNodeId, attributes }, layout: { nodeIndex: layoutNodeIndex, bounds } }],
+    documents: [{
+      nodes: { nodeName, parentIndex, backendNodeId, attributes, contentDocumentIndex: { index: cdIndex, value: cdIndex.map(() => 0) } },
+      layout: { nodeIndex: layoutNodeIndex, bounds },
+    }],
   };
 }
 
@@ -267,6 +272,19 @@ async function regionSuite() {
     assert.strictEqual(regions[0].inViewport, true);
     assert.strictEqual(regions[0].backendNodeId, 101, 'carries node id for lookup + crop');
     assert.strictEqual(regions[1].backendNodeId, 103);
+  });
+
+  await test('cross-origin iframe (no embedded doc) → an iframe region; same-origin does not', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'DIV',    parent: -1, backend: 300 },
+      { tag: 'IFRAME', parent: 0,  backend: 301, bounds: [0, 0, 400, 300] },                                  // ✓ cross-origin: no content doc in snapshot
+      { tag: 'IFRAME', parent: 0,  backend: 302, bounds: [0, 320, 400, 300], contentDoc: true },              // ✗ same-origin: doc embedded + already extracted
+      { tag: 'IFRAME', parent: 0,  backend: 303, attrs: { 'aria-hidden': 'true' }, bounds: [0, 700, 400, 300] }, // ✗ hidden from a11y
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    const regions = collectRegions(snapshot, maps, viewport, {});
+    assert.deepStrictEqual(regions.map(r => r.role), ['iframe'], 'only the cross-origin iframe surfaces');
+    assert.strictEqual(regions[0].backendNodeId, 301);
   });
 
   await test('aria-label names a graphic; inViewportOnly drops off-screen regions', () => {
