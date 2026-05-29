@@ -99,7 +99,9 @@ Environment:
   OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').
   OPEN_RECON_CONTEXT      Trusted background injected into the system prompt.
   OPENAI_PROMPT_CACHE_RETENTION  Optional OpenAI cache retention ('24h' for
-                          extended retention on supported models; unset = default).`);
+                          extended retention on supported models; unset = default).
+  OLLAMA_KEEP_ALIVE       Optional: keep the Ollama model + KV cache loaded
+                          ('30m', seconds, or '-1' for forever; unset = 5m).`);
 }
 
 function validateConfig(config) {

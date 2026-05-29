@@ -512,7 +512,9 @@ The system prompt and tool definitions are byte-identical across a run's 30–50
 - `prompt_cache_key` — set to the run id (threaded from `loop.js` as `req.cacheKey`), combined with the prefix hash to keep a run's turns sticky to one machine. A run does ~1 request/turn, well under the ~15 req/min/key overflow ceiling.
 - `prompt_cache_retention` — optional, via `OPENAI_PROMPT_CACHE_RETENTION` (e.g. `24h`). Left unset by default so each model uses its own default and models that don't support extended retention aren't sent a field they'd reject.
 
-Hits surface as `usage.prompt_tokens_details.cached_tokens`. Ollama has no prompt cache; it ignores `cacheKey`.
+Hits surface as `usage.prompt_tokens_details.cached_tokens`.
+
+**Ollama** (`providers/ollama.js`) — automatic KV-cache prefix reuse, local and with no API parameter (so `cacheKey` is ignored). It reuses computation for a byte-identical prompt prefix while the model is loaded, which the static-first / dynamic-last ordering already provides. The lever here is lifetime: Ollama unloads the model and dumps its KV cache after `keep_alive` of inactivity (default 5m). Per-turn requests refresh that timer, so a run stays warm; set `OLLAMA_KEEP_ALIVE` (e.g. `30m`, or `-1` for forever) to keep the cache across back-to-back runs. Ollama reports no separate cached-token count.
 
 ### Other caching seams (not implemented)
 
