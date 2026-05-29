@@ -4,7 +4,7 @@
   "reasoningEffort": "high",
 
   "loop": {
-    "maxSteps": 50,
+    "maxSteps": 150,
     "shortCircuitOnNoChange": true,
     "pollMs": 1500,
     "maxNoChangePolls": 3,
