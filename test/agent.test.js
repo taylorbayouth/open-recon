@@ -1067,6 +1067,19 @@ async function loopSuite() {
     assert.match(msg, /scrolled 400\/2400px/, 'scroll position present');
   });
 
+  await test('a revisited URL is flagged in the turn message; a first visit is not', async () => {
+    const reqs = installFakeProvider([
+      [action('scroll', { args: { direction: 'down' } })],  // turn 1 @ /a
+      [action('scroll', { args: { direction: 'down' } })],  // turn 2 @ /b
+      [action('done', { args: {} })],                       // turn 3 @ /a (revisit)
+    ]);
+    const mk = (url) => () => makeBrief({ url });
+    const session = makeFakeSession([mk('http://x.test/a'), mk('http://x.test/b'), mk('http://x.test/a')]);
+    await run({ session, task: 'x', config: baseConfig({ loop: { shortCircuitOnNoChange: false } }) });
+    assert.ok(!/REVISIT/.test(reqs[0].messages[0].content), 'first visit to /a is not flagged');
+    assert.match(reqs[2].messages[0].content, /REVISIT — you've already been here 1×/, 'revisit to /a is flagged');
+  });
+
   await test('repeating an action does NOT abort when the page keeps changing', async () => {
     installFakeProvider([
       [action('click', { ref: '@e1' })],
@@ -1336,6 +1349,33 @@ async function cacheSuite() {
   await test('anthropic: empty tool list is handled without a breakpoint', () => {
     assert.deepStrictEqual(toAnthropicTools([]), []);
     assert.deepStrictEqual(toAnthropicTools(undefined), []);
+  });
+
+  await test('openai: reasoning_effort is sent when set, omitted when null', async () => {
+    const openai = require('../lib/providers/openai');
+    const origFetch = global.fetch;
+    const origKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-key';
+    let captured = null;
+    global.fetch = async (_url, opts) => {
+      captured = JSON.parse(opts.body);
+      return {
+        ok: true, status: 200,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: {} }),
+        text: async () => '',
+        headers: { get: () => null },
+      };
+    };
+    try {
+      const base = { system: 's', tools: [], messages: [{ role: 'user', content: 'hi' }] };
+      await openai.plan({ ...base, reasoningEffort: 'high' });
+      assert.strictEqual(captured.reasoning_effort, 'high', 'forwarded to the request body');
+      await openai.plan({ ...base, reasoningEffort: null });
+      assert.strictEqual('reasoning_effort' in captured, false, 'omitted when null (non-reasoning models reject it)');
+    } finally {
+      global.fetch = origFetch;
+      if (origKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = origKey;
+    }
   });
 }
 
