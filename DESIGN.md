@@ -317,6 +317,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 |---|---|---|
 | `provider` | `openai` | LLM provider (also `OPEN_RECON_PROVIDER`). |
 | `model` | `null` | `null` → provider's own default. |
+| `context` | `null` | Optional trusted background (user info, prefs) appended to the system prompt (also `OPEN_RECON_CONTEXT`, `--context`/`-c`). `null` → no Context section. |
 | `loop.maxSteps` | `30` | Hard cap on LLM turns. |
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
@@ -491,26 +492,39 @@ Each provider's `plan()` translates these generic tool defs into its native form
 const prompt = require('./prompt');
 const actions = require('./actions');
 
-const system = prompt.buildSystemPrompt(actions);
-// → "You are a browser agent. Available actions: …"
+const system = prompt.buildSystemPrompt(actions, config.context);
+// → "You are a browser agent. Available actions: …\n\nContext (trusted …): …"
 ```
 
 The system prompt is built once per Run, kept in `Run.system` (optional, for debugging), and sent as the first message of every Plan call.
 
+**Optional context.** `config.context` (also `OPEN_RECON_CONTEXT` / `--context`) is operator-supplied background — who the user is, preferences — and is *authoritative*, unlike page text. It's appended as a labelled trusted block at the **very end** of the prompt, never spliced into the middle: the template + action list above it are byte-identical across runs and form the cacheable prefix (see *Caching seams*), so a per-run context value would invalidate the cache for everything after it if placed earlier. Keeping it last confines the variation to the tail. When `context` is null/empty the block — header included — is omitted entirely.
+
 ---
 
-## Caching seams (not implemented yet)
+## Prompt caching
 
-Caching is deferred. These are the named seams where it will land:
+The system prompt and tool definitions are byte-identical across a run's 30–50 turns (only the per-turn user message changes), so both providers cache that prefix. The dynamic turn message is always last; the optional operator `context` lives at the end of the system block (see *Prompt construction*), so a per-run context value never sits between two cacheable blocks.
 
-| Seam | Where | What gets cached |
+**Anthropic** (`providers/anthropic.js`) — explicit breakpoints via `cache_control: { type: "ephemeral" }`. The cache hierarchy is tools → system → messages. We set two breakpoints: one on the **last tool** and one on the **system block**. Within a run both hit on turns 2..N. The split matters across runs: when `context` differs the system breakpoint misses, but the unchanged tools prefix still hits via its own breakpoint instead of being re-billed with system. Hits show up as `cache_read_input_tokens`; a miss just costs full input tokens (no downside).
+
+**OpenAI** (`providers/openai.js`) — caching is automatic for prompts ≥1024 tokens (no breakpoints). It caches the longest common prefix and routes by a hash of the first ~256 tokens, so we keep static fields (tools, then system) first and the turn message last. Two levers from the caching guide:
+- `prompt_cache_key` — set to the run id (threaded from `loop.js` as `req.cacheKey`), combined with the prefix hash to keep a run's turns sticky to one machine. A run does ~1 request/turn, well under the ~15 req/min/key overflow ceiling.
+- `prompt_cache_retention` — optional, via `OPENAI_PROMPT_CACHE_RETENTION` (e.g. `24h`). Left unset by default so each model uses its own default and models that don't support extended retention aren't sent a field they'd reject.
+
+Hits surface as `usage.prompt_tokens_details.cached_tokens`.
+
+**Ollama** (`providers/ollama.js`) — automatic KV-cache prefix reuse, local and with no API parameter (so `cacheKey` is ignored). It reuses computation for a byte-identical prompt prefix while the model is loaded, which the static-first / dynamic-last ordering already provides. The lever here is lifetime: Ollama unloads the model and dumps its KV cache after `keep_alive` of inactivity (default 5m). Per-turn requests refresh that timer, so a run stays warm; set `OLLAMA_KEEP_ALIVE` (e.g. `30m`, or `-1` for forever) to keep the cache across back-to-back runs. Ollama reports no separate cached-token count.
+
+### Other caching seams (not implemented)
+
+| Seam | Where | What would be cached |
 |---|---|---|
-| Anthropic prompt cache | `providers/anthropic.js` | System prompt + tool defs + (optionally) early steps. Marked with `cache_control: { type: "ephemeral" }`. Requires deterministic Reduce output. |
-| Brief diff | `loop.js` | `briefHash` comparison: if a new Brief has the same hash as the previous one, optionally skip the Plan call entirely. |
+| Brief diff | `loop.js` | `briefHash` comparison: if a new Brief has the same hash as the previous one, optionally skip the Plan call entirely. (Partially realized: the no-change short-circuit polls instead of re-prompting.) |
 | Element resolution | `lib/execute.js` | `backendNodeId → nodeId` (from `DOM.requestNode`). Lifetime: one Brief. Invalidated on re-snapshot. |
 | LLMView | `reduce.js` | `briefHash → LLMView` map. Trivial — Reduce is pure. |
 
-None of these are implemented in the first slice. The interfaces are shaped so that adding them is additive: a new module wrapping an existing call, never a refactor of the call site.
+These remain additive: a new module wrapping an existing call, never a refactor of the call site.
 
 ---
 

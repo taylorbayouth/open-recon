@@ -59,6 +59,7 @@ function parseArgs(argv) {
     else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--provider' || a === '-p') override.provider = value(argv, i++, a);
     else if (a === '--model') override.model = value(argv, i++, a);
+    else if (a === '--context' || a === '-c') override.context = value(argv, i++, a);
     else if (a === '--poll-ms') override.loop.pollMs = num(value(argv, i++, a), '--poll-ms', parseInt);
     else if (a === '--executor') override.executor.backend = value(argv, i++, a);
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
@@ -79,6 +80,9 @@ Options:
   --task, -t <string>          The task for the agent (or pass as positional)
   --provider, -p <name>        LLM provider: openai | anthropic | ollama
   --model <id>                 Override the provider's default model
+  --context, -c <string>       Trusted background for the agent (user info,
+                               preferences). Injected at the end of the system
+                               prompt. Omit for none.
   --poll-ms <n>                Wait between re-checks while the page is unchanged
   --executor <os|cdp>          Input backend. Default 'os' uses recon-input (macOS).
   --verbose, -v                Log each loop turn to stderr
@@ -92,7 +96,12 @@ Environment:
   OPENAI_API_KEY          Required for the openai provider (the default).
   ANTHROPIC_API_KEY       Required for the anthropic provider.
   OPEN_RECON_PROVIDER     Override config provider ('openai'|'anthropic'|'ollama').
-  OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').`);
+  OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').
+  OPEN_RECON_CONTEXT      Trusted background injected into the system prompt.
+  OPENAI_PROMPT_CACHE_RETENTION  Optional OpenAI cache retention ('24h' for
+                          extended retention on supported models; unset = default).
+  OLLAMA_KEEP_ALIVE       Optional: keep the Ollama model + KV cache loaded
+                          ('30m', seconds, or '-1' for forever; unset = 5m).`);
 }
 
 function validateConfig(config) {

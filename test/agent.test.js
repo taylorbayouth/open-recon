@@ -467,6 +467,26 @@ async function promptSuite() {
     assert.ok(prompt.includes('type[@e] (text: string)'), 'required args should be shown');
     assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
+
+  await test('context is omitted (no header) when null/empty', () => {
+    const reg = { click: registry.click, done: registry.done };
+    const base = buildSystemPrompt(reg);
+    assert.ok(!base.includes('Context ('), 'no context header when absent');
+    assert.strictEqual(buildSystemPrompt(reg, null), base, 'null → identical to no arg');
+    assert.strictEqual(buildSystemPrompt(reg, '   '), base, 'whitespace-only → omitted');
+  });
+
+  await test('context, when present, is appended as a trusted block at the very end', () => {
+    const reg = { click: registry.click, done: registry.done };
+    const base = buildSystemPrompt(reg);
+    const ctx = 'The user is Taylor; prefers concise replies.';
+    const withCtx = buildSystemPrompt(reg, ctx);
+    // The static template must remain an unmodified prefix, so providers can
+    // cache it across runs regardless of the per-run context value.
+    assert.ok(withCtx.startsWith(base), 'static template stays an intact prefix');
+    assert.ok(withCtx.endsWith(ctx), 'context sits at the very end (nothing cacheable after it)');
+    assert.ok(withCtx.includes('Context ('), 'trusted header is shown when present');
+  });
 }
 
 async function tokenSuite() {
@@ -764,6 +784,28 @@ async function providerTranslationSuite() {
   });
 }
 
+async function cacheSuite() {
+  console.log('\nprompt caching (provider breakpoints):');
+  const { toAnthropicTools } = require('../lib/providers/anthropic');
+
+  await test('anthropic: cache breakpoint lands only on the last tool', () => {
+    const tools = [
+      { name: 'click', inputSchema: { ref: 'string' } },
+      { name: 'done', inputSchema: { result: 'string?' } },
+    ];
+    const out = toAnthropicTools(tools);
+    assert.strictEqual(out[0].cache_control, undefined, 'non-last tools carry no breakpoint');
+    assert.deepStrictEqual(out[out.length - 1].cache_control, { type: 'ephemeral' },
+      'the last tool caches the tool-definitions prefix');
+    assert.strictEqual(out[1].name, 'done', 'tool order/content is otherwise preserved');
+  });
+
+  await test('anthropic: empty tool list is handled without a breakpoint', () => {
+    assert.deepStrictEqual(toAnthropicTools([]), []);
+    assert.deepStrictEqual(toAnthropicTools(undefined), []);
+  });
+}
+
 async function normalizeUrlSuite() {
   console.log('\nnormalizeUrl (scheme allowlist):');
 
@@ -869,6 +911,7 @@ async function postJSONSuite() {
   await loopSuite();
   await memorySuite();
   await providerTranslationSuite();
+  await cacheSuite();
   await normalizeUrlSuite();
   await postJSONSuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);
