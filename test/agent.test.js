@@ -364,32 +364,67 @@ async function screenshotSuite() {
 
 async function osGateSuite() {
   console.log('\nos backend (input gate):');
-  const { ensureInputSafe } = require('../lib/executors/os');
+  const { ensureInputSafe, pageToScreen } = require('../lib/executors/os');
 
-  // Minimal fake of the session's CDP client: send() answers the gate probes,
-  // Page.bringToFront records the raise. idleGuard disabled so gate 2 is skipped.
+  // Minimal fake of the recon-input helper client: send() answers the gate
+  // probes. Deliberately NO `Page` domain — the real helper is a JSON-RPC client
+  // over the Swift binary, not a CDP client, so ensureInputSafe must never reach
+  // for `.Page` (foregrounding lives in pageToScreen, which holds the CDP client).
   const fakeClient = (overrides = {}) => ({
     verbose: false,
     idleGuard: { enabled: false, thresholdMs: 0 },
     send: async ({ op }) => (op === 'frontapp' ? { bundleId: 'com.google.Chrome' } : {}),
-    Page: { bringToFront: async () => {} },
     ...overrides,
   });
 
-  await test('raises the current target to front once both gates pass', async () => {
+  await test('passes once Chrome is frontmost, using only the helper protocol (no CDP Page)', async () => {
     const calls = [];
     const client = fakeClient({
       send: async ({ op }) => { calls.push(op); return op === 'frontapp' ? { bundleId: 'com.google.Chrome' } : {}; },
-      Page: { bringToFront: async () => { calls.push('bringToFront'); } },
     });
-    await ensureInputSafe(client);
+    await ensureInputSafe(client);   // must resolve without ever touching client.Page
     assert.ok(calls.includes('frontapp'), 'checked Chrome is frontmost');
-    assert.ok(calls.includes('bringToFront'), 'raised the current target window so input lands on it');
   });
 
-  await test('a failed bringToFront does not abort the input', async () => {
-    const client = fakeClient({ Page: { bringToFront: async () => { throw new Error('no Page domain'); } } });
-    await ensureInputSafe(client);   // must resolve, not throw — raise is best-effort
+  await test('aborts (wait:false) when Chrome is not the frontmost app', async () => {
+    const client = fakeClient({
+      send: async ({ op }) => (op === 'frontapp' ? { bundleId: 'com.apple.Terminal', name: 'Terminal' } : {}),
+    });
+    await assert.rejects(() => ensureInputSafe(client, { wait: false }), /not the frontmost app/);
+  });
+
+  // Foregrounding the followed tab moved here from the input gate: pageToScreen
+  // holds the CDP client (session.client, with a real Page domain), so this is
+  // where the pinned target's window is actually raised before input lands.
+  const screenSession = (over = {}) => ({
+    _target: { id: 'T1' },
+    client: {
+      Page: {
+        bringToFront: over.bringToFront || (async () => {}),
+        getLayoutMetrics: async () => ({
+          cssLayoutViewport: { pageX: 0, pageY: 0, clientWidth: 1000, clientHeight: 800 },
+          cssVisualViewport: { clientWidth: 1000, clientHeight: 800 },
+        }),
+      },
+      Target: { getTargets: async () => ({ targetInfos: [{ targetId: 'T1', type: 'page' }] }) },
+      Browser: {
+        getWindowForTarget: async () => ({ windowId: 1 }),
+        getWindowBounds: async () => ({ bounds: { left: 0, top: 0, width: 1000, height: 900 } }),
+      },
+    },
+  });
+
+  await test('pageToScreen raises the pinned target window before converting coords', async () => {
+    let raised = false;
+    const session = screenSession({ bringToFront: async () => { raised = true; } });
+    await pageToScreen(session, 100, 100, { viewportRelative: true });
+    assert.ok(raised, 'brought the pinned target window to front so input lands on it');
+  });
+
+  await test('pageToScreen still maps coords when the raise fails (best-effort)', async () => {
+    const session = screenSession({ bringToFront: async () => { throw new Error('detached target'); } });
+    const screen = await pageToScreen(session, 100, 100, { viewportRelative: true });
+    assert.ok(Number.isFinite(screen.x) && Number.isFinite(screen.y), 'coordinate mapping proceeds despite a failed raise');
   });
 }
 
@@ -924,6 +959,42 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'stuck', r.error);
     // click executes twice; the 3rd identical pick (with no page change) aborts.
     assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('error-repeat guard aborts when a re-issued action keeps erroring', async () => {
+    installFakeProvider([[action('click', { ref: '@e1' })]]);  // same click every turn
+    const session = makeFakeSession([makeBrief]);              // brief stable across turns
+    // The click ERRORS every turn (e.g. target covered by a sticky overlay). An
+    // errored action nulls lastHash, so the no-op guard's `sameAction` can never
+    // see it — the separate error-repeat guard (sameErroredTarget) must catch it.
+    session.client.Input.dispatchMouseEvent = async (p) => {
+      if (p.type === 'mousePressed') throw new Error('covered by sticky nav');
+      session.calls.push(['mouse', p]);
+    };
+    const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxStuckRepeats: 2 } }) });
+    assert.strictEqual(r.status, 'stuck', r.error);
+    // Errors on turns 1 and 2; the 3rd identical pick aborts before executing again.
+    assert.strictEqual(r.steps.length, 2);
+    assert.ok(r.steps.every(s => s.observation.status === 'error'), 'each recorded click errored');
+  });
+
+  await test('error-repeat guard resets when the model varies its action between errors', async () => {
+    installFakeProvider([
+      [action('click', { ref: '@e1' })],                    // errors
+      [action('scroll', { args: { direction: 'down' } })],  // succeeds — model tries something else
+      [action('click', { ref: '@e1' })],                    // errors again, but the streak reset
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('done', { args: { result: 'ok' } })],
+    ]);
+    const session = makeFakeSession([makeBrief]);
+    // Only the click (mousePressed) errors; the scroll's mouseWheel succeeds, so an
+    // intervening different action breaks the error streak and we must NOT abort.
+    session.client.Input.dispatchMouseEvent = async (p) => {
+      if (p.type === 'mousePressed') throw new Error('covered by sticky nav');
+      session.calls.push(['mouse', p]);
+    };
+    const r = await run({ session, task: 'x', config: baseConfig({ loop: { maxStuckRepeats: 2 } }) });
+    assert.strictEqual(r.status, 'completed', r.error);
   });
 
   await test('selectText reports the selected text and skips the no-change wait', async () => {
