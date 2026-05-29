@@ -216,7 +216,11 @@ Rules:
 | `selectText` | Highlight a node's full text | Targets `@e` or `@t`. Click-drag from the node's top-left to bottom-right corner (selects whole node, not a sub-phrase). |
 | `scroll` | Scroll the page | `direction: "up"|"down"`, optional `amount` in CSS pixels (default: one viewport). |
 | `navigate` | Load a new URL | Causes a full re-snapshot; refs from prior briefs are invalidated. |
-| `screenshot` | Capture the viewport, save it, and have a vision model describe it | Top-level, `changesPage:false`. For visual content the text listing can't convey (image CAPTCHAs, charts, canvas) or "take a screenshot" tasks. Optional `hint` focuses the description. Backend-agnostic (CDP `Page.captureScreenshot`). The PNG is saved to `runs/<id>/images/` (via the scratchpad) and the saved path + description ride back as the Observation detail into the event log, so the model can finish referencing the file. Repeating it on an unchanged page trips the stuck-guard. See `lib/vision.js` + `vision` config. |
+| `take_screenshot` | Capture the viewport, save it, and have a vision model describe it | Top-level, `changesPage:false`, `idempotentRead`. For visual content the text listing can't convey (image CAPTCHAs, charts, canvas) or "take a screenshot" tasks. Optional `hint` focuses the description. Backend-agnostic (CDP `Page.captureScreenshot`). PNG → `runs/<id>/assets/`; saved path + description ride back as Observation detail into the event log. See `lib/vision.js` + `vision` config. |
+| `get_images` | List the page's images (URL, name, size, position) | Top-level, `changesPage:false`, `idempotentRead`. Images aren't in the perception listing; this scans for them on demand via `lib/media.js` (DOM reads only — `DOM.querySelectorAll`/`getAttributes`/`getBoxModel`, no page JS). The compact list rides back as Observation detail; the model passes a chosen URL to `save_file`. |
+| `get_files` | List downloadable file links (PDFs, docs, archives) | Top-level, `changesPage:false`, `idempotentRead`. Same scanner as `get_images`, filtered to `<a href>`/`<embed>`/`<object>`/`<iframe>` whose target looks like a file (extension or `download` attr). |
+| `save_text` | Save model-authored text to the run | Top-level, `changesPage:false`. Loop-level (special-cased in `execute.js`, no backend, no extra LLM call). `content` → `runs/<id>/assets/note-N.txt`; only the model's `summary` re-enters the event log. |
+| `save_file` | Download the bytes at a URL and save them | Top-level, `changesPage:false`. URL typically from `get_images`/`get_files`. Download is no-page-JS: `data:` decode → `Page.getResourceContent` (cached, exact, no CSP) → `Network.loadNetworkResource` (cold, CSP-limited). Image → vision summary; else metadata. Bytes → `assets/`; summary re-enters the event log. See `lib/savefile.js`. |
 | `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
 | `done` | Signal task completion | Loop captures the optional `result` string and exits with status `completed`. |
 
@@ -325,7 +329,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `executor.userIdleMs` | `600` | OS backend: how long the human must be idle before input resumes. |
 | `executor.raiseChromeOnStart` | `true` | OS backend: preflight foregrounds the agent's Chrome (PID-targeted) so the frontmost-gate is satisfied without manual clicking. |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
-| `vision.provider` | `openai` | Vision model provider for the `screenshot` verb (`openai`/`anthropic`/`ollama`). Independent of the planner `provider`. |
+| `vision.provider` | `openai` | Vision model provider for the image-summary path (`take_screenshot`, and `save_file` on images) — `openai`/`anthropic`/`ollama`. Independent of the planner `provider`. |
 | `vision.model` | `null` | `null` → a multimodal default for the chosen provider. |
 | `vision.prompt` | `"Describe what you see…"` | Static base prompt sent with the image; a per-call `hint` is appended. |
 | `vision.maxTokens` | `1024` | Output cap for the vision call. |

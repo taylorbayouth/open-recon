@@ -13,32 +13,51 @@
 
 ## See it
 
-```
-you@dev open-recon % node agent.js --verbose "Go to news.ycombinator.com. \
-  For each story visible in the feed, use selectText with save:true to capture the \
-  title and point count. Do not click into any articles. Collect 5 stories this way, \
-  scrolling as needed. Return the list."
+Ask for a live browser task in plain English:
 
+```bash
+node agent.js --verbose "Go to github.com/trending/javascript?since=daily. \
+  Collect the first 5 repositories with owner/name, description, total stars, \
+  and stars today. Do not open repo pages. Return a compact markdown table."
+```
+
+Open Recon launches or attaches to Chrome, reads the tab through Chrome's internal accessibility/layout channels, and gives the model a compact text view like this:
+
+```text
 [preflight] Chrome on :9222 ✓  provider: openai ✓  executor: os ✓
-[step 1] navigate → news.ycombinator.com
-[step 2] snapshot → 41 elements, 88 text nodes, 312ms
-[step 3] selectText @t3 "Ask HN: What's the best way to learn systems programming?" save:true
-[step 4] selectText @t9 "Show HN: I built a local-first SQLite sync layer"  save:true
-[step 5] selectText @t14 "Tailscale acquires Headscale"  save:true
-[step 6] scroll ↓ 600px
-[step 7] snapshot → 44 elements, 91 text nodes, 287ms
-[step 8] selectText @t6 "The unreasonable effectiveness of just showing up"  save:true
-[step 9] selectText @t11 "GPT-5 system card"  save:true
-[step 10] done
+[step 1] navigate → github.com/trending/javascript?since=daily
+[step 2] snapshot → 63 elements, 118 text nodes, 341ms
 
-1. Ask HN: What's the best way to learn systems programming?  (312 points)
-2. Show HN: I built a local-first SQLite sync layer  (204 points)
-3. Tailscale acquires Headscale  (891 points)
-4. The unreasonable effectiveness of just showing up  (156 points)
-5. GPT-5 system card  (2341 points)
+[@t7]   heading     "Trending JavaScript repositories"       (322,151)
+[@e14]  link        "facebook / react"                       (214,241)
+[@t18]  StaticText  "The library for web and native user interfaces."
+[@t23]  StaticText  "230,000"
+[@t24]  StaticText  "174 stars today"
+[@e27]  link        "vercel / next.js"                       (207,385)
+[@t31]  StaticText  "The React Framework"
+[@t36]  StaticText  "128,000"
+[@t37]  StaticText  "96 stars today"
 ```
 
-No browser visible. No screenshot taken. No DOM sent to the model. Ten steps, under 4 seconds.
+Then it acts on refs, scrolls only if needed, and returns the answer:
+
+```text
+[step 3] selectText @e14 save:true
+[step 4] selectText @t18 save:true
+[step 5] selectText @t23 save:true
+[step 6] selectText @t24 save:true
+[step 7] selectText @e27 save:true
+...
+[step 18] done
+
+| Repository | Description | Stars | Today |
+|---|---|---:|---:|
+| facebook/react | The library for web and native user interfaces. | 230,000 | 174 |
+| vercel/next.js | The React Framework | 128,000 | 96 |
+| ... | ... | ... | ... |
+```
+
+No extraction script runs in the page. No DOM dump goes to the model. It gets just the on-screen controls and text, then drives Chrome through normal input.
 
 ---
 
