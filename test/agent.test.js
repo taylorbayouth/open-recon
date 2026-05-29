@@ -326,6 +326,19 @@ async function screenshotSuite() {
       assert.strictEqual(s.calls[0].clip, undefined);
       assert.strictEqual(out.cropped, false);
     });
+
+    await test('quality tiers by ref: a cropped read is higher quality than a describe', async () => {
+      const s1 = fakeSession();
+      const out1 = await screenshot({ session: s1, brief: makeBrief() });   // no ref → describe
+      const s2 = fakeSession();
+      const brief = makeBrief({ regions: [{ ref: '@r1', role: 'canvas', bbox: { x: 0, y: 0, width: 100, height: 100 }, inViewport: true }] });
+      const out2 = await screenshot({ session: s2, brief, ref: '@r1' });     // ref → cropped read
+      assert.strictEqual(s1.calls[0].format, 'jpeg');
+      assert.strictEqual(s2.calls[0].format, 'jpeg');
+      assert.ok(s2.calls[0].quality > s1.calls[0].quality, 'cropped read encoded at higher quality than a full-page describe');
+      assert.strictEqual(out1.mimeType, 'image/jpeg');
+      assert.strictEqual(out1.ext, 'jpg');
+    });
   } finally {
     visionMod.describe = origDescribe;
   }
