@@ -16,11 +16,13 @@ const registry = require('../lib/actions');
 const { createExecutor } = require('../lib/execute');
 const planMod = require('../lib/plan');
 const { run } = require('../lib/loop');
-const { loadConfig, ConfigError } = require('../lib/config');
+const { loadConfig, deepMerge, DEFAULTS, ConfigError } = require('../lib/config');
 const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
 const { normalizeUrl } = require('../lib/executors/page');
+const { createScratchpad } = require('../lib/scratchpad');
+const { buildSystemPrompt } = require('../lib/prompt');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -349,12 +351,86 @@ async function executeSuite() {
 async function configSuite() {
   console.log('\nconfig:');
 
+  await test('deepMerge preserves sibling defaults and skips undefined overrides', () => {
+    const merged = deepMerge(DEFAULTS, {
+      loop: { maxSteps: 7, pollMs: undefined },
+      view: { includeCoords: false },
+    });
+    assert.strictEqual(merged.loop.maxSteps, 7);
+    assert.strictEqual(merged.loop.pollMs, DEFAULTS.loop.pollMs);
+    assert.strictEqual(merged.loop.shortCircuitOnNoChange, DEFAULTS.loop.shortCircuitOnNoChange);
+    assert.strictEqual(merged.view.includeCoords, false);
+    assert.strictEqual(merged.executor.backend, DEFAULTS.executor.backend);
+  });
+
+  await test('env overrides do not mutate DEFAULTS across reloads', () => {
+    const oldProvider = process.env.OPEN_RECON_PROVIDER;
+    const oldExecutor = process.env.OPEN_RECON_EXECUTOR;
+    try {
+      process.env.OPEN_RECON_PROVIDER = 'anthropic';
+      process.env.OPEN_RECON_EXECUTOR = 'cdp';
+      const overridden = loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+      assert.strictEqual(overridden.provider, 'anthropic');
+      assert.strictEqual(overridden.executor.backend, 'cdp');
+
+      delete process.env.OPEN_RECON_PROVIDER;
+      delete process.env.OPEN_RECON_EXECUTOR;
+      const fresh = loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+      assert.strictEqual(fresh.provider, DEFAULTS.provider);
+      assert.strictEqual(fresh.executor.backend, DEFAULTS.executor.backend);
+    } finally {
+      if (oldProvider === undefined) delete process.env.OPEN_RECON_PROVIDER;
+      else process.env.OPEN_RECON_PROVIDER = oldProvider;
+      if (oldExecutor === undefined) delete process.env.OPEN_RECON_EXECUTOR;
+      else process.env.OPEN_RECON_EXECUTOR = oldExecutor;
+      loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+    }
+  });
+
   await test('invalid config JSON fails explicitly', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-config-'));
     const file = path.join(dir, 'bad.json');
     try {
       fs.writeFileSync(file, '{ bad json');
       assert.throws(() => loadConfig({ path: file, reload: true }), ConfigError);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+async function scratchpadSuite() {
+  console.log('\nscratchpad:');
+
+  await test('disabled scratchpad performs no filesystem writes', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ enabled: false, dir, runId: 'x' });
+      scratch.append({ title: 'Ignored', text: 'Nope' });
+      assert.strictEqual(scratch.saveText({ content: 'Nope' }), null);
+      assert.strictEqual(scratch.saveImage({ base64: Buffer.from('x').toString('base64') }), null);
+      assert.strictEqual(scratch.readMarkdown(), '');
+      assert.deepStrictEqual(fs.readdirSync(dir), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('saveText and saveImage persist assets and markdown references', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const text = scratch.saveText({ content: 'Full captured text', summary: 'Captured note', url: 'https://example.test/a' });
+      const image = scratch.saveImage({ base64: Buffer.from('png bytes').toString('base64'), title: 'Shot' });
+      const md = scratch.readMarkdown();
+
+      assert.strictEqual(fs.readFileSync(text.path, 'utf8'), 'Full captured text');
+      assert.strictEqual(fs.readFileSync(image.path, 'utf8'), 'png bytes');
+      assert.ok(md.includes('### Captured note'));
+      assert.ok(md.includes('- File: assets/note-1.txt'));
+      assert.ok(md.includes('- Image: assets/screenshot-1.png'));
+      assert.strictEqual(scratch.textCount, 1);
+      assert.strictEqual(scratch.imageCount, 1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -375,6 +451,21 @@ async function logSuite() {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+}
+
+async function promptSuite() {
+  console.log('\nprompt:');
+
+  await test('system prompt renders action signatures from the registry', () => {
+    const prompt = buildSystemPrompt({
+      click: registry.click,
+      type: registry.type,
+      done: registry.done,
+    });
+    assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
+    assert.ok(prompt.includes('type[@e] (text: string)'), 'required args should be shown');
+    assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
 }
 
@@ -771,7 +862,9 @@ async function postJSONSuite() {
   await validateSuite();
   await executeSuite();
   await configSuite();
+  await scratchpadSuite();
   await logSuite();
+  await promptSuite();
   await tokenSuite();
   await loopSuite();
   await memorySuite();
