@@ -285,7 +285,7 @@ screen.y = window.top  + chromeOffsetY + (pageY - scrollY)
 - `chromeOffsetY` — Chrome's title + tab + URL bar height. Computed as `windowBounds.height - cssVisualViewport.clientHeight`.
 - `chromeOffsetX` — usually 0; computed analogously for completeness.
 
-`window`/scroll/offset are all resolved per-dispatch against the session's **current** target (`Browser.getWindowForTarget(targetId)`), so after the session follows a popup or new tab (see below) the math automatically tracks that window. Because CGEvents land on whichever window is topmost at the screen point, the input gate (`ensureInputSafe`) calls `Page.bringToFront()` on the current target once its safety gates clear — so a followed popup is raised above any window behind it before the click lands.
+`window`/scroll/offset are all resolved per-dispatch against the session's **current** target (`Browser.getWindowForTarget(targetId)`), so after the session follows a popup or new tab (see below) the math automatically tracks that window. Because CGEvents land on whichever window is topmost at the screen point, coordinate conversion (`pageToScreen`) calls `Page.bringToFront()` on the current target before each dispatch — so a followed popup is raised above any window behind it before the click lands. (The input safety gate `ensureInputSafe` can't do this: it holds only the recon-input helper, which has no CDP `Page` domain.)
 
 ### Tab following (multi-tab / popups)
 
@@ -483,7 +483,7 @@ Provider is resolved in this order: the `provider` arg to `plan()` / `run()` →
 | `anthropic` | `providers/anthropic.js` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | forced `0` |
 | `ollama` | `providers/ollama.js` | `llama3.1` | none (local server; `OLLAMA_HOST` override) | forced `0` |
 
-`openai` and `ollama` are implemented with native `fetch` (no SDK). `anthropic` uses `@anthropic-ai/sdk`. All three speak the same generic `{ system, tools, messages }` request and return the same `Completion` artifact, so the loop is provider-agnostic.
+`openai`, `anthropic`, and `ollama` are all implemented with native `fetch` (no vendor SDK), sharing the request/retry/Completion scaffolding in `_shared.js`. All three speak the same generic `{ system, tools, messages }` request and return the same `Completion` artifact, so the loop is provider-agnostic.
 
 ### Tool definitions
 

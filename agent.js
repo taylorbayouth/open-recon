@@ -120,6 +120,11 @@ function validateConfig(config) {
   };
   posInt(config.loop?.maxSteps, 'loop.maxSteps');
   posInt(config.loop?.pollMs, 'loop.pollMs');
+  // The dead-loop guards (see lib/loop.js): a non-positive value here would
+  // silently weaken or disable stuck/empty-plan/no-change detection.
+  posInt(config.loop?.maxNoChangePolls, 'loop.maxNoChangePolls');
+  posInt(config.loop?.maxStuckRepeats, 'loop.maxStuckRepeats');
+  posInt(config.loop?.maxEmptyPlans, 'loop.maxEmptyPlans');
 }
 
 async function main() {
