@@ -20,7 +20,7 @@ const { loadConfig, deepMerge, DEFAULTS, ConfigError } = require('../lib/config'
 const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
-const { normalizeUrl } = require('../lib/executors/page');
+const { normalizeUrl, clickablePoint, assertHittable, bestQuadRect } = require('../lib/executors/page');
 const { createScratchpad } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
@@ -571,6 +571,127 @@ async function executeSuite() {
   });
 }
 
+async function targetingSuite() {
+  console.log('\nclick targeting & hit-test:');
+
+  // A CDP client that serves content quads + layout metrics, for the precise
+  // (non-fallback) clickablePoint path.
+  function quadSession({ quads, layout }) {
+    return {
+      client: {
+        DOM: {
+          enable: async () => {},
+          getDocument: async () => {},
+          scrollIntoViewIfNeeded: async () => {},
+          getContentQuads: async () => ({ quads }),
+        },
+        Page: { getLayoutMetrics: async () => layout },
+      },
+    };
+  }
+  const layout1k = { cssLayoutViewport: { pageX: 0, pageY: 0, clientWidth: 1000, clientHeight: 800 } };
+
+  await test('bestQuadRect picks the largest viewport-visible quad', () => {
+    const small = [0, 0, 20, 0, 20, 20, 0, 20];        // 20×20 at origin
+    const big   = [100, 100, 400, 100, 400, 300, 100, 300]; // 300×200
+    const r = bestQuadRect([small, big], 1000, 800);
+    assert.deepStrictEqual(r, { x: 100, y: 100, width: 300, height: 200 });
+  });
+
+  await test('bestQuadRect clamps a quad to the visible viewport', () => {
+    const offBottom = [0, 700, 200, 700, 200, 1200, 0, 1200]; // extends past vh=800
+    const r = bestQuadRect([offBottom], 1000, 800);
+    assert.deepStrictEqual(r, { x: 0, y: 700, width: 200, height: 100 });
+  });
+
+  await test('clickablePoint aims at the content-quad center (viewport coords)', async () => {
+    const quad = [10, 10, 110, 10, 110, 50, 10, 50]; // rect x10 y10 w100 h40
+    const session = quadSession({ quads: [quad], layout: layout1k });
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.strictEqual(pt.source, 'quad');
+    assert.strictEqual(pt.x, 60);  // 10 + 100/2
+    assert.strictEqual(pt.y, 30);  // 10 + 40/2
+  });
+
+  await test('clickablePoint falls back to bbox center when quads unavailable', async () => {
+    // No Page domain ⇒ precise path is skipped, bbox-center fallback is used.
+    const session = { client: { DOM: { enable: async () => {}, getDocument: async () => {} } } };
+    const pt = await clickablePoint({ session, brief: makeBrief(), ref: '@e1' });
+    assert.strictEqual(pt.source, 'bbox');
+    assert.strictEqual(pt.x, 250); // 100 + 300/2 - scroll(0)
+    assert.strictEqual(pt.y, 220); // 200 + 40/2 - scroll(0)
+  });
+
+  // A CDP client for assertHittable: getNodeForLocation reports the topmost
+  // backendNodeId; describeNode returns a (pierced) subtree keyed by id.
+  function hitSession({ topmostId, trees }) {
+    return {
+      client: {
+        DOM: {
+          getNodeForLocation: async () => ({ backendNodeId: topmostId }),
+          describeNode: async ({ backendNodeId }) =>
+            ({ node: trees[backendNodeId] || { backendNodeId, children: [] } }),
+        },
+      },
+    };
+  }
+  const brief = makeBrief(); // @e1 → lookup 111
+
+  await test('assertHittable passes when the aim point hits the target exactly', async () => {
+    const session = hitSession({ topmostId: 111, trees: {} });
+    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+  });
+
+  await test('assertHittable passes when the topmost node is a descendant of the target', async () => {
+    const trees = { 111: { backendNodeId: 111, children: [{ backendNodeId: 999, children: [] }] } };
+    const session = hitSession({ topmostId: 999, trees });
+    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+  });
+
+  await test('assertHittable throws when an unrelated overlay covers the aim point', async () => {
+    const trees = {
+      111: { backendNodeId: 111, children: [] },                 // target subtree: no 222
+      222: { backendNodeId: 222, nodeName: 'DIV', attributes: ['id', 'cookie-wall'], children: [] },
+    };
+    const session = hitSession({ topmostId: 222, trees });
+    await assert.rejects(
+      () => assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }),
+      /covered .*cookie-wall/
+    );
+  });
+
+  await test('assertHittable fails open when getNodeForLocation is unavailable', async () => {
+    const session = { client: { DOM: {} } };
+    await assertHittable({ session, brief, ref: '@e1', x: 250, y: 220 }); // no throw
+  });
+
+  await test('cdp type clears the field by default (select-all before insertText)', async () => {
+    const session = makeFakeSession([makeBrief()]); // @e1 role 'textbox'
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    await exec.execute([action('type', { ref: '@e1', args: { text: 'hi' } })], session, makeBrief());
+    const selectAll = session.calls.find(c => c[0] === 'key' && c[1].type === 'keyDown' && c[1].key === 'a');
+    assert.ok(selectAll, 'expected a select-all keyDown before typing');
+    assert.ok(selectAll[1].modifiers === 2 || selectAll[1].modifiers === 4, 'select-all carries Ctrl/Meta');
+    assert.ok(session.calls.some(c => c[0] === 'insertText' && c[1].text === 'hi'));
+  });
+
+  await test('cdp type with clear:false appends (no select-all)', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    await exec.execute([action('type', { ref: '@e1', args: { text: 'hi', clear: false } })], session, makeBrief());
+    assert.ok(!session.calls.some(c => c[0] === 'key' && c[1].key === 'a'), 'no select-all when clear:false');
+    assert.ok(session.calls.some(c => c[0] === 'insertText' && c[1].text === 'hi'));
+  });
+
+  await test('cdp type does not select-all a non-text element', async () => {
+    const brief = makeBrief({ elements: [{ ref: '@e1', role: 'button', name: 'Go', bbox: [100, 200, 80, 30] }] });
+    const session = makeFakeSession([brief]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    await exec.execute([action('type', { ref: '@e1', args: { text: 'hi' } })], session, brief);
+    assert.ok(!session.calls.some(c => c[0] === 'key' && c[1].key === 'a'), 'button role is not cleared');
+  });
+}
+
 async function configSuite() {
   console.log('\nconfig:');
 
@@ -687,7 +808,7 @@ async function promptSuite() {
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
-    assert.ok(prompt.includes('type[@e] (text: string)'), 'required args should be shown');
+    assert.ok(prompt.includes('type[@e] (text: string, clear: boolean?)'), 'required + optional args should be shown');
     assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
 
@@ -1129,6 +1250,7 @@ async function postJSONSuite() {
   await osGateSuite();
   await validateSuite();
   await executeSuite();
+  await targetingSuite();
   await configSuite();
   await scratchpadSuite();
   await logSuite();

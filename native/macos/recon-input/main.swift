@@ -194,11 +194,11 @@ func humanMove(to target: CGPoint, speedPxPerSec: Double, jitterPx: Double) {
 
 // ─── Keyboard ────────────────────────────────────────────────────────────────
 
-// Named-key → CGKeyCode. Covers command/navigation keys an agent realistically
-// presses. Most text still goes through `type`; `l` exists for Cmd+L URL-bar
-// navigation without involving CDP Page.navigate.
+// Named-key → CGKeyCode. Covers command/navigation keys plus the letter/digit
+// keys, so the executor can post modifier chords (e.g. Cmd+A to select-all
+// before replacing a field's text, Cmd+C/Cmd+V). Most prose still goes through
+// `type`; these keycodes exist for accelerators, not bulk text entry.
 let NAMED_KEYS: [String: CGKeyCode] = [
-    "l": 0x25,
     "return": 0x24, "enter": 0x24,
     "tab": 0x30,
     "space": 0x31,
@@ -210,6 +210,15 @@ let NAMED_KEYS: [String: CGKeyCode] = [
     "f1": 0x7A, "f2": 0x78, "f3": 0x63, "f4": 0x76,
     "f5": 0x60, "f6": 0x61, "f7": 0x62, "f8": 0x64,
     "f9": 0x65, "f10": 0x6D, "f11": 0x67, "f12": 0x6F,
+    // Letters (US-ANSI virtual keycodes; layout-independent for accelerators).
+    "a": 0x00, "b": 0x0B, "c": 0x08, "d": 0x02, "e": 0x0E, "f": 0x03,
+    "g": 0x05, "h": 0x04, "i": 0x22, "j": 0x26, "k": 0x28, "l": 0x25,
+    "m": 0x2E, "n": 0x2D, "o": 0x1F, "p": 0x23, "q": 0x0C, "r": 0x0F,
+    "s": 0x01, "t": 0x11, "u": 0x20, "v": 0x09, "w": 0x0D, "x": 0x07,
+    "y": 0x10, "z": 0x06,
+    // Digits.
+    "0": 0x1D, "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15,
+    "5": 0x17, "6": 0x16, "7": 0x1A, "8": 0x1C, "9": 0x19,
 ]
 
 func modifierFlags(_ names: [String]) -> CGEventFlags {
