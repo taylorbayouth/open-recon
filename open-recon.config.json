@@ -1,7 +1,7 @@
 {
   "provider": "openai",
-  "model": "gpt-5.5",
-  "reasoningEffort": "low",
+  "model": "gpt-5.4-mini",
+  "reasoningEffort": "medium",
 
   "loop": {
     "maxSteps": 150,
