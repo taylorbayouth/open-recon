@@ -57,12 +57,15 @@ The output of `extract.js`. Already implemented (`schemaVersion: "2.0"`). One ad
   "viewport": { "width": …, "height": …, "scrollX": …, "scrollY": … },
   "elements": [ { "ref": "@e1", "role": "button", "name": "...", "bbox": [...] }, … ],
   "text":     [ { "ref": "@t1", "role": "heading", "name": "...", "level": 2, … }, … ],
+  "regions":  [ { "role": "canvas", "bbox": [...], "inViewport": true }, … ],
   "lookup":   { "@e1": 1276, "@t1": 1419 },
   "stats":    { … }
 }
 ```
 
 `briefHash` is computed over a canonical serialization: sorted refs and their resolved data, viewport, url, title. Timestamps, `elapsedMs`, and other ephemeral fields are excluded. Two semantically-identical pages produce the same hash.
+
+**Unreadable regions** (`regions`) are the one part of the page the accessibility tree can't describe: a rendered `<canvas>`, an `<img>` with no `alt`, or an `<svg>` with no accessible name. Their content (chart, map, scanned text, CAPTCHA) is pixels, not text, so it never appears in `elements`/`text`. `extract.js` reads them straight from the DOMSnapshot — tag + attributes + layout — and emits a region for each rendered graphic that has **no accessible name** and is **not nested in a link/button** (those are control icons, already represented by the control). This is a deterministic structural fact, not a heuristic about whether content is "missing": we report that a nameless graphic is painted here, and the planner decides whether it matters. Regions carry **no `ref`** and are absent from `lookup` — no verb targets them. In the LLMView they render as `[unreadable]` lines in reading order with coordinates; the model reads one by scrolling it into view and calling `take_screenshot` (viewport-only capture, so position matters). Region *presence* (role only, not bbox) is included in `briefHash`, so a page gaining or losing a graphic re-prompts.
 
 ### LLMView
 

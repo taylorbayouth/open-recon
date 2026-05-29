@@ -23,6 +23,7 @@ const shared = require('../lib/providers/_shared');
 const { normalizeUrl } = require('../lib/executors/page');
 const { createScratchpad } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
+const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -192,6 +193,89 @@ async function reduceSuite() {
     assert.strictEqual(computeBriefHash(a), computeBriefHash(moved), 'bbox excluded from hash');
     const renamed = makeBrief({ elements: [{ ref: '@e1', role: 'textbox', name: 'Find', bbox: [100, 200, 300, 40] }] });
     assert.notStrictEqual(computeBriefHash(a), computeBriefHash(renamed), 'name change busts hash');
+  });
+
+  await test('renders unreadable regions in reading order, no ref, points at screenshot', () => {
+    const brief = makeBrief({
+      elements: [],
+      text: [{ ref: '@t1', role: 'heading', name: 'Sales', bbox: [0, 10, 100, 20] }],
+      regions: [{ role: 'canvas', bbox: [0, 100, 640, 480], inViewport: true }],
+    });
+    const v = reduce(brief, { includeText: true, includeCoords: true });
+    const lines = v.listing.split('\n');
+    assert.ok(lines[0].includes('@t1'), 'heading (y=10) sorts above the canvas (y=100)');
+    const region = lines.find(l => l.includes('[unreadable]'));
+    assert.ok(region, 'region line present');
+    assert.ok(region.includes('canvas') && region.includes('640×480'), 'role and dimensions shown');
+    assert.ok(region.includes('take_screenshot'), 'inline instruction points at the verb');
+    assert.match(region, /\(320,340\)/, 'center coords appended so the model can scroll to it');
+    assert.ok(!/@[a-z]\d/.test(region), 'region carries no actionable ref');
+  });
+
+  await test('computeBriefHash: regions bust the hash, position does not', () => {
+    const without = makeBrief({ regions: [] });
+    const withCanvas = makeBrief({ regions: [{ role: 'canvas', bbox: [0, 0, 10, 10], inViewport: true }] });
+    assert.notStrictEqual(computeBriefHash(without), computeBriefHash(withCanvas), 'gaining a region re-prompts');
+    const moved = makeBrief({ regions: [{ role: 'canvas', bbox: [500, 500, 10, 10], inViewport: true }] });
+    assert.strictEqual(computeBriefHash(withCanvas), computeBriefHash(moved), 'region bbox excluded from hash');
+  });
+}
+
+// Build a one-document DOMSnapshot from a compact node spec. Each node is
+// { tag, parent, backend, attrs?: {name:val}, bounds?: [x,y,w,h] }. Strings are
+// interned into the shared table the way captureSnapshot returns them.
+function makeSnapshot(nodeSpecs) {
+  const strings = [];
+  const intern = (s) => { let i = strings.indexOf(s); if (i < 0) { i = strings.length; strings.push(s); } return i; };
+  const nodeName = [], parentIndex = [], backendNodeId = [], attributes = [];
+  const layoutNodeIndex = [], bounds = [];
+  nodeSpecs.forEach((n, i) => {
+    nodeName.push(intern(n.tag));
+    parentIndex.push(n.parent ?? -1);
+    backendNodeId.push(n.backend);
+    const flat = [];
+    for (const [k, val] of Object.entries(n.attrs || {})) { flat.push(intern(k)); flat.push(intern(String(val))); }
+    attributes.push(flat);
+    if (n.bounds) { layoutNodeIndex.push(i); bounds.push(n.bounds); }
+  });
+  return {
+    strings,
+    documents: [{ nodes: { nodeName, parentIndex, backendNodeId, attributes }, layout: { nodeIndex: layoutNodeIndex, bounds } }],
+  };
+}
+
+async function regionSuite() {
+  console.log('\ncollectRegions:');
+  const viewport = { width: 1000, height: 2000, scrollX: 0, scrollY: 0 };
+
+  await test('surfaces unnamed canvas/img; skips named, hidden, nested, titled, zero-size', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'DIV',    parent: -1, backend: 100 },
+      { tag: 'CANVAS', parent: 0,  backend: 101, bounds: [10, 10, 200, 100] },               // ✓ unnamed canvas
+      { tag: 'IMG',    parent: 0,  backend: 102, attrs: { alt: 'product' }, bounds: [10, 120, 50, 50] }, // ✗ alt present
+      { tag: 'IMG',    parent: 0,  backend: 103, bounds: [10, 180, 50, 50] },                // ✓ alt-less img
+      { tag: 'BUTTON', parent: 0,  backend: 104, bounds: [10, 240, 40, 40] },
+      { tag: 'svg',    parent: 4,  backend: 105, bounds: [12, 242, 16, 16] },                // ✗ icon inside button
+      { tag: 'svg',    parent: 0,  backend: 106, bounds: [10, 300, 80, 80] },                // ✗ has <title> child
+      { tag: 'title',  parent: 6,  backend: 107 },
+      { tag: 'CANVAS', parent: 0,  backend: 108, attrs: { 'aria-hidden': 'true' }, bounds: [10, 400, 300, 200] }, // ✗ aria-hidden
+      { tag: 'CANVAS', parent: 0,  backend: 109, bounds: [10, 620, 0, 0] },                  // ✗ zero-area
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    const regions = collectRegions(snapshot, maps, viewport, {});
+    assert.deepStrictEqual(regions.map(r => r.role), ['canvas', 'image'], 'only the two unnamed graphics surface');
+    assert.deepStrictEqual(regions[0].bbox, { x: 10, y: 10, width: 200, height: 100 }, 'canvas bbox in CSS px');
+    assert.strictEqual(regions[0].inViewport, true);
+  });
+
+  await test('aria-label names a graphic; inViewportOnly drops off-screen regions', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'CANVAS', parent: -1, backend: 200, attrs: { 'aria-label': 'Revenue chart' }, bounds: [0, 0, 100, 100] }, // ✗ named
+      { tag: 'CANVAS', parent: -1, backend: 201, bounds: [0, 5000, 100, 100] },              // off-screen (y beyond viewport)
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    assert.strictEqual(collectRegions(snapshot, maps, viewport, {}).length, 1, 'off-screen still listed without the filter');
+    assert.strictEqual(collectRegions(snapshot, maps, viewport, { inViewportOnly: true }).length, 0, 'inViewportOnly drops it');
   });
 }
 
@@ -901,6 +985,7 @@ async function postJSONSuite() {
 
 (async () => {
   await reduceSuite();
+  await regionSuite();
   await validateSuite();
   await executeSuite();
   await configSuite();
