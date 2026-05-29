@@ -6,7 +6,7 @@
     "maxSteps": 50,
     "shortCircuitOnNoChange": true,
     "pollMs": 1500,
-    "maxNoChangePolls": 10,
+    "maxNoChangePolls": 3,
     "maxEmptyPlans": 3
   },
 
