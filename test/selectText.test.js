@@ -113,7 +113,7 @@ function findText(brief, name) {
       const brief = await session.extract({ format: 'lean', inViewportOnly: true });
       const node = findText(brief, 'Turing Machine');
       assert.ok(node, 'heading text node not found in brief');
-      await cdp.selectText({ session, brief, ref: node.ref });
+      await cdp.select_text({ session, brief, ref: node.ref });
       const sel = await getSelectionText(session);
       assert.strictEqual(norm(sel), 'Turing Machine', `got "${norm(sel)}"`);
     });
@@ -124,7 +124,7 @@ function findText(brief, name) {
       const brief = await session.extract({ format: 'lean', inViewportOnly: true });
       const node = findText(brief, expected);
       assert.ok(node, 'paragraph text node not found in brief');
-      await cdp.selectText({ session, brief, ref: node.ref });
+      await cdp.select_text({ session, brief, ref: node.ref });
       const sel = norm(await getSelectionText(session));
       // Whole-node selection: the full paragraph text must be covered. (Allow
       // exact match; includes guards against a stray trailing space.)
@@ -143,7 +143,7 @@ function findText(brief, name) {
       assert.ok((brief.viewport?.scrollY ?? 0) > 100, 'page should be scrolled for this test');
       const node = findText(brief, 'Below The Fold Heading');
       assert.ok(node, 'below-fold heading not found in brief');
-      await cdp.selectText({ session, brief, ref: node.ref });
+      await cdp.select_text({ session, brief, ref: node.ref });
       assert.strictEqual(norm(await getSelectionText(session)), 'Below The Fold Heading');
     });
 
@@ -156,7 +156,7 @@ function findText(brief, name) {
       const brief = await session.extract({ format: 'lean', inViewportOnly: true });
       const input = (brief.elements || []).find(e => e.role === 'textbox');
       assert.ok(input, 'input element not found in brief');
-      await cdp.selectText({ session, brief, ref: input.ref });
+      await cdp.select_text({ session, brief, ref: input.ref });
       const { result } = await session.client.Runtime.evaluate({
         expression: "(() => { const i = document.getElementById('inp'); return i.value.substring(i.selectionStart, i.selectionEnd); })()",
         returnByValue: true,
@@ -168,7 +168,7 @@ function findText(brief, name) {
       await clearSelection(session);
       const brief = await session.extract({ format: 'lean', inViewportOnly: true });
       const node = findText(brief, 'Below The Fold Heading');
-      await cdp.selectText({ session, brief, ref: node.ref });
+      await cdp.select_text({ session, brief, ref: node.ref });
       assert.strictEqual(norm(await getSelectionText(session)), 'Below The Fold Heading');
     });
 

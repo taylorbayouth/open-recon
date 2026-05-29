@@ -20,7 +20,7 @@ const { loadConfig, deepMerge, DEFAULTS, ConfigError } = require('../lib/config'
 const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
-const { normalizeUrl, clickablePoint, assertHittable, bestQuadRect } = require('../lib/executors/page');
+const { normalizeUrl, back, clickablePoint, assertHittable, bestQuadRect } = require('../lib/executors/page');
 const { createScratchpad } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
@@ -490,9 +490,9 @@ async function validateSuite() {
     assert.match(errors[0].error, /not present in current snapshot/);
   });
 
-  await test('only take_screenshot accepts an @r ref; click/selectText reject it', () => {
+  await test('only take_screenshot accepts an @r ref; click/select_text reject it', () => {
     const lookup = { '@r1': 333 };
-    for (const verb of ['click', 'selectText']) {
+    for (const verb of ['click', 'select_text']) {
       const { ok, errors } = validate([action(verb, { ref: '@r1' })], lookup, registry);
       assert.strictEqual(ok.length, 0, `${verb} must reject @r`);
       assert.match(errors[0].error, /requires ref type/);
@@ -997,9 +997,9 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'completed', r.error);
   });
 
-  await test('selectText reports the selected text and skips the no-change wait', async () => {
+  await test('select_text reports the selected text and skips the no-change wait', async () => {
     const reqs = installFakeProvider([
-      [action('selectText', { ref: '@t1' })],
+      [action('select_text', { ref: '@t1' })],
       [action('done', { args: {} })],
     ]);
     const session = makeFakeSession([makeBrief, makeBrief]);
@@ -1047,6 +1047,54 @@ async function loopSuite() {
       config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 } }),
     });
     assert.strictEqual(r.status, 'completed', r.error);
+  });
+}
+
+async function backSuite() {
+  console.log('\nback + history:');
+  const cdp = require('../lib/executors/cdp');
+  const osExec = require('../lib/executors/os');
+
+  const historyClient = ({ currentIndex, entries, onNavigate } = {}) => ({
+    Page: {
+      enable: async () => {},
+      getNavigationHistory: async () => ({ currentIndex, entries }),
+      navigateToHistoryEntry: async ({ entryId }) => { onNavigate && onNavigate(entryId); },
+    },
+    // readyState 'complete' lets waitUntilLoaded short-circuit (bfcache restore).
+    Runtime: { evaluate: async () => ({ result: { value: 'complete' } }) },
+  });
+
+  await test('back navigates to the previous history entry', async () => {
+    let toEntry = null;
+    const session = { client: historyClient({
+      currentIndex: 2,
+      entries: [{ id: 10 }, { id: 11 }, { id: 12 }],
+      onNavigate: (id) => { toEntry = id; },
+    }) };
+    await back({ session });
+    assert.strictEqual(toEntry, 11);  // entries[currentIndex - 1]
+  });
+
+  await test('back throws (non-fatal) when there is no previous page', async () => {
+    const session = { client: historyClient({ currentIndex: 0, entries: [{ id: 10 }] }) };
+    await assert.rejects(() => back({ session }), /no previous page/);
+  });
+
+  await test('back validates with no ref or args', () => {
+    const { ok, errors } = validate([action('back')], {}, registry);
+    assert.strictEqual(errors.length, 0, JSON.stringify(errors));
+    assert.strictEqual(ok.length, 1);
+  });
+
+  await test('both backends dispatch back + select_text (old selectText key gone)', () => {
+    const os = osExec.create({});
+    for (const verb of ['back', 'select_text']) {
+      assert.strictEqual(typeof cdp[verb], 'function', `cdp exposes ${verb}`);
+      assert.strictEqual(typeof os[verb], 'function', `os exposes ${verb}`);
+    }
+    assert.strictEqual(cdp.selectText, undefined, 'cdp: old selectText key removed');
+    assert.strictEqual(os.selectText, undefined, 'os: old selectText key removed');
   });
 }
 
@@ -1328,6 +1376,7 @@ async function postJSONSuite() {
   await promptSuite();
   await tokenSuite();
   await loopSuite();
+  await backSuite();
   await memorySuite();
   await providerTranslationSuite();
   await cacheSuite();
