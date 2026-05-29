@@ -97,7 +97,9 @@ Environment:
   ANTHROPIC_API_KEY       Required for the anthropic provider.
   OPEN_RECON_PROVIDER     Override config provider ('openai'|'anthropic'|'ollama').
   OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').
-  OPEN_RECON_CONTEXT      Trusted background injected into the system prompt.`);
+  OPEN_RECON_CONTEXT      Trusted background injected into the system prompt.
+  OPENAI_PROMPT_CACHE_RETENTION  Optional OpenAI cache retention ('24h' for
+                          extended retention on supported models; unset = default).`);
 }
 
 function validateConfig(config) {

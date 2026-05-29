@@ -784,6 +784,28 @@ async function providerTranslationSuite() {
   });
 }
 
+async function cacheSuite() {
+  console.log('\nprompt caching (provider breakpoints):');
+  const { toAnthropicTools } = require('../lib/providers/anthropic');
+
+  await test('anthropic: cache breakpoint lands only on the last tool', () => {
+    const tools = [
+      { name: 'click', inputSchema: { ref: 'string' } },
+      { name: 'done', inputSchema: { result: 'string?' } },
+    ];
+    const out = toAnthropicTools(tools);
+    assert.strictEqual(out[0].cache_control, undefined, 'non-last tools carry no breakpoint');
+    assert.deepStrictEqual(out[out.length - 1].cache_control, { type: 'ephemeral' },
+      'the last tool caches the tool-definitions prefix');
+    assert.strictEqual(out[1].name, 'done', 'tool order/content is otherwise preserved');
+  });
+
+  await test('anthropic: empty tool list is handled without a breakpoint', () => {
+    assert.deepStrictEqual(toAnthropicTools([]), []);
+    assert.deepStrictEqual(toAnthropicTools(undefined), []);
+  });
+}
+
 async function normalizeUrlSuite() {
   console.log('\nnormalizeUrl (scheme allowlist):');
 
@@ -889,6 +911,7 @@ async function postJSONSuite() {
   await loopSuite();
   await memorySuite();
   await providerTranslationSuite();
+  await cacheSuite();
   await normalizeUrlSuite();
   await postJSONSuite();
   console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed`);

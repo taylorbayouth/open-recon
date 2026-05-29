@@ -502,18 +502,27 @@ The system prompt is built once per Run, kept in `Run.system` (optional, for deb
 
 ---
 
-## Caching seams (not implemented yet)
+## Prompt caching
 
-Caching is deferred. These are the named seams where it will land:
+The system prompt and tool definitions are byte-identical across a run's 30–50 turns (only the per-turn user message changes), so both providers cache that prefix. The dynamic turn message is always last; the optional operator `context` lives at the end of the system block (see *Prompt construction*), so a per-run context value never sits between two cacheable blocks.
 
-| Seam | Where | What gets cached |
+**Anthropic** (`providers/anthropic.js`) — explicit breakpoints via `cache_control: { type: "ephemeral" }`. The cache hierarchy is tools → system → messages. We set two breakpoints: one on the **last tool** and one on the **system block**. Within a run both hit on turns 2..N. The split matters across runs: when `context` differs the system breakpoint misses, but the unchanged tools prefix still hits via its own breakpoint instead of being re-billed with system. Hits show up as `cache_read_input_tokens`; a miss just costs full input tokens (no downside).
+
+**OpenAI** (`providers/openai.js`) — caching is automatic for prompts ≥1024 tokens (no breakpoints). It caches the longest common prefix and routes by a hash of the first ~256 tokens, so we keep static fields (tools, then system) first and the turn message last. Two levers from the caching guide:
+- `prompt_cache_key` — set to the run id (threaded from `loop.js` as `req.cacheKey`), combined with the prefix hash to keep a run's turns sticky to one machine. A run does ~1 request/turn, well under the ~15 req/min/key overflow ceiling.
+- `prompt_cache_retention` — optional, via `OPENAI_PROMPT_CACHE_RETENTION` (e.g. `24h`). Left unset by default so each model uses its own default and models that don't support extended retention aren't sent a field they'd reject.
+
+Hits surface as `usage.prompt_tokens_details.cached_tokens`. Ollama has no prompt cache; it ignores `cacheKey`.
+
+### Other caching seams (not implemented)
+
+| Seam | Where | What would be cached |
 |---|---|---|
-| Anthropic prompt cache | `providers/anthropic.js` | System prompt + tool defs + (optionally) early steps. Marked with `cache_control: { type: "ephemeral" }`. Requires deterministic Reduce output. |
-| Brief diff | `loop.js` | `briefHash` comparison: if a new Brief has the same hash as the previous one, optionally skip the Plan call entirely. |
+| Brief diff | `loop.js` | `briefHash` comparison: if a new Brief has the same hash as the previous one, optionally skip the Plan call entirely. (Partially realized: the no-change short-circuit polls instead of re-prompting.) |
 | Element resolution | `lib/execute.js` | `backendNodeId → nodeId` (from `DOM.requestNode`). Lifetime: one Brief. Invalidated on re-snapshot. |
 | LLMView | `reduce.js` | `briefHash → LLMView` map. Trivial — Reduce is pure. |
 
-None of these are implemented in the first slice. The interfaces are shaped so that adding them is additive: a new module wrapping an existing call, never a refactor of the call site.
+These remain additive: a new module wrapping an existing call, never a refactor of the call site.
 
 ---
 
