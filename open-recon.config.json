@@ -1,6 +1,7 @@
 {
   "provider": "openai",
   "model": "gpt-5.4-mini",
+  "reasoningEffort": "high",
 
   "loop": {
     "maxSteps": 50,
