@@ -195,21 +195,20 @@ async function reduceSuite() {
     assert.notStrictEqual(computeBriefHash(a), computeBriefHash(renamed), 'name change busts hash');
   });
 
-  await test('renders unreadable regions in reading order, no ref, points at screenshot', () => {
+  await test('renders unreadable regions in reading order with an @r ref + crop hint', () => {
     const brief = makeBrief({
       elements: [],
       text: [{ ref: '@t1', role: 'heading', name: 'Sales', bbox: [0, 10, 100, 20] }],
-      regions: [{ role: 'canvas', bbox: [0, 100, 640, 480], inViewport: true }],
+      regions: [{ ref: '@r1', role: 'canvas', bbox: [0, 100, 640, 480], inViewport: true }],
     });
     const v = reduce(brief, { includeText: true, includeCoords: true });
     const lines = v.listing.split('\n');
     assert.ok(lines[0].includes('@t1'), 'heading (y=10) sorts above the canvas (y=100)');
-    const region = lines.find(l => l.includes('[unreadable]'));
-    assert.ok(region, 'region line present');
+    const region = lines.find(l => l.includes('[@r1]'));
+    assert.ok(region, 'region line present with its @r ref');
     assert.ok(region.includes('canvas') && region.includes('640×480'), 'role and dimensions shown');
-    assert.ok(region.includes('take_screenshot'), 'inline instruction points at the verb');
-    assert.match(region, /\(320,340\)/, 'center coords appended so the model can scroll to it');
-    assert.ok(!/@[a-z]\d/.test(region), 'region carries no actionable ref');
+    assert.ok(region.includes('take_screenshot @r1'), 'points the model at a cropped screenshot of this ref');
+    assert.match(region, /\(320,340\)/, 'center coords appended');
   });
 
   await test('computeBriefHash: regions bust the hash, position does not', () => {
@@ -266,6 +265,8 @@ async function regionSuite() {
     assert.deepStrictEqual(regions.map(r => r.role), ['canvas', 'image'], 'only the two unnamed graphics surface');
     assert.deepStrictEqual(regions[0].bbox, { x: 10, y: 10, width: 200, height: 100 }, 'canvas bbox in CSS px');
     assert.strictEqual(regions[0].inViewport, true);
+    assert.strictEqual(regions[0].backendNodeId, 101, 'carries node id for lookup + crop');
+    assert.strictEqual(regions[1].backendNodeId, 103);
   });
 
   await test('aria-label names a graphic; inViewportOnly drops off-screen regions', () => {
@@ -277,6 +278,57 @@ async function regionSuite() {
     assert.strictEqual(collectRegions(snapshot, maps, viewport, {}).length, 1, 'off-screen still listed without the filter');
     assert.strictEqual(collectRegions(snapshot, maps, viewport, { inViewportOnly: true }).length, 0, 'inViewportOnly drops it');
   });
+}
+
+async function screenshotSuite() {
+  console.log('\nscreenshot (crop):');
+  const { screenshot } = require('../lib/screenshot');
+  const visionMod = require('../lib/vision');
+  const origDescribe = visionMod.describe;
+  visionMod.describe = async () => 'a description';   // no network/LLM in unit tests
+
+  const fakeSession = () => {
+    const calls = [];
+    return { calls, client: { Page: { captureScreenshot: async (p) => { calls.push(p); return { data: 'BASE64PNG' }; } } } };
+  };
+
+  try {
+    await test('no ref → whole viewport, no clip', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief() });
+      assert.strictEqual(s.calls[0].clip, undefined, 'no clip param');
+      assert.strictEqual(s.calls[0].captureBeyondViewport, undefined);
+      assert.strictEqual(out.cropped, false);
+    });
+
+    await test('region ref → clip from its bbox, captureBeyondViewport on (off-screen ok)', async () => {
+      const s = fakeSession();
+      const brief = makeBrief({
+        regions: [{ ref: '@r1', role: 'canvas', bbox: { x: 5, y: 600, width: 640, height: 480 }, inViewport: false }],
+      });
+      const out = await screenshot({ session: s, brief, ref: '@r1' });
+      assert.deepStrictEqual(s.calls[0].clip, { x: 5, y: 600, width: 640, height: 480, scale: 1 });
+      assert.strictEqual(s.calls[0].captureBeyondViewport, true, 'off-screen graphic captured without scrolling');
+      assert.strictEqual(out.cropped, true);
+      assert.strictEqual(out.ref, '@r1');
+    });
+
+    await test('element ref with array bbox is normalized to a clip', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief(), ref: '@e1' });  // bbox [100,200,300,40]
+      assert.deepStrictEqual(s.calls[0].clip, { x: 100, y: 200, width: 300, height: 40, scale: 1 });
+      assert.strictEqual(out.cropped, true);
+    });
+
+    await test('unknown/boxless ref degrades to a full-viewport capture', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief(), ref: '@r9' });
+      assert.strictEqual(s.calls[0].clip, undefined);
+      assert.strictEqual(out.cropped, false);
+    });
+  } finally {
+    visionMod.describe = origDescribe;
+  }
 }
 
 async function validateSuite() {
@@ -323,6 +375,31 @@ async function validateSuite() {
   await test('tolerates extra args', () => {
     const { ok } = validate([action('press', { args: { key: 'Enter', bogus: 1 } })], {}, registry);
     assert.strictEqual(ok.length, 1);
+  });
+
+  await test('take_screenshot: optional ref — accepts @e/@t/@r, valid with none', () => {
+    const lookup = { '@e1': 111, '@t1': 222, '@r1': 333 };
+    for (const ref of ['@e1', '@t1', '@r1']) {
+      const { ok, errors } = validate([action('take_screenshot', { ref })], lookup, registry);
+      assert.strictEqual(ok.length, 1, `${ref} accepted: ${JSON.stringify(errors)}`);
+    }
+    const { ok } = validate([action('take_screenshot')], lookup, registry);
+    assert.strictEqual(ok.length, 1, 'no ref is valid — full-viewport capture');
+  });
+
+  await test('take_screenshot: a present-but-unknown ref is rejected', () => {
+    const { ok, errors } = validate([action('take_screenshot', { ref: '@r9' })], { '@r1': 333 }, registry);
+    assert.strictEqual(ok.length, 0);
+    assert.match(errors[0].error, /not present in current snapshot/);
+  });
+
+  await test('only take_screenshot accepts an @r ref; click/selectText reject it', () => {
+    const lookup = { '@r1': 333 };
+    for (const verb of ['click', 'selectText']) {
+      const { ok, errors } = validate([action(verb, { ref: '@r1' })], lookup, registry);
+      assert.strictEqual(ok.length, 0, `${verb} must reject @r`);
+      assert.match(errors[0].error, /requires ref type/);
+    }
   });
 
   await test('malformed action records an error instead of throwing', () => {
@@ -986,6 +1063,7 @@ async function postJSONSuite() {
 (async () => {
   await reduceSuite();
   await regionSuite();
+  await screenshotSuite();
   await validateSuite();
   await executeSuite();
   await configSuite();
