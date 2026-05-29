@@ -23,6 +23,7 @@ const shared = require('../lib/providers/_shared');
 const { normalizeUrl } = require('../lib/executors/page');
 const { createScratchpad } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
+const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -193,6 +194,172 @@ async function reduceSuite() {
     const renamed = makeBrief({ elements: [{ ref: '@e1', role: 'textbox', name: 'Find', bbox: [100, 200, 300, 40] }] });
     assert.notStrictEqual(computeBriefHash(a), computeBriefHash(renamed), 'name change busts hash');
   });
+
+  await test('renders unreadable regions in reading order with an @r ref + crop hint', () => {
+    const brief = makeBrief({
+      elements: [],
+      text: [{ ref: '@t1', role: 'heading', name: 'Sales', bbox: [0, 10, 100, 20] }],
+      regions: [{ ref: '@r1', role: 'canvas', bbox: [0, 100, 640, 480], inViewport: true }],
+    });
+    const v = reduce(brief, { includeText: true, includeCoords: true });
+    const lines = v.listing.split('\n');
+    assert.ok(lines[0].includes('@t1'), 'heading (y=10) sorts above the canvas (y=100)');
+    const region = lines.find(l => l.includes('[@r1]'));
+    assert.ok(region, 'region line present with its @r ref');
+    assert.ok(region.includes('canvas') && region.includes('640×480'), 'role and dimensions shown');
+    assert.ok(region.includes('take_screenshot @r1'), 'points the model at a cropped screenshot of this ref');
+    assert.match(region, /\(320,340\)/, 'center coords appended');
+  });
+
+  await test('computeBriefHash: regions bust the hash, position does not', () => {
+    const without = makeBrief({ regions: [] });
+    const withCanvas = makeBrief({ regions: [{ role: 'canvas', bbox: [0, 0, 10, 10], inViewport: true }] });
+    assert.notStrictEqual(computeBriefHash(without), computeBriefHash(withCanvas), 'gaining a region re-prompts');
+    const moved = makeBrief({ regions: [{ role: 'canvas', bbox: [500, 500, 10, 10], inViewport: true }] });
+    assert.strictEqual(computeBriefHash(withCanvas), computeBriefHash(moved), 'region bbox excluded from hash');
+  });
+}
+
+// Build a one-document DOMSnapshot from a compact node spec. Each node is
+// { tag, parent, backend, attrs?: {name:val}, bounds?: [x,y,w,h] }. Strings are
+// interned into the shared table the way captureSnapshot returns them.
+function makeSnapshot(nodeSpecs) {
+  const strings = [];
+  const intern = (s) => { let i = strings.indexOf(s); if (i < 0) { i = strings.length; strings.push(s); } return i; };
+  const nodeName = [], parentIndex = [], backendNodeId = [], attributes = [];
+  const layoutNodeIndex = [], bounds = [];
+  const cdIndex = [];   // contentDocumentIndex.index — iframes with an embedded (same-process) doc
+  nodeSpecs.forEach((n, i) => {
+    nodeName.push(intern(n.tag));
+    parentIndex.push(n.parent ?? -1);
+    backendNodeId.push(n.backend);
+    const flat = [];
+    for (const [k, val] of Object.entries(n.attrs || {})) { flat.push(intern(k)); flat.push(intern(String(val))); }
+    attributes.push(flat);
+    if (n.bounds) { layoutNodeIndex.push(i); bounds.push(n.bounds); }
+    if (n.contentDoc) cdIndex.push(i);
+  });
+  return {
+    strings,
+    documents: [{
+      nodes: { nodeName, parentIndex, backendNodeId, attributes, contentDocumentIndex: { index: cdIndex, value: cdIndex.map(() => 0) } },
+      layout: { nodeIndex: layoutNodeIndex, bounds },
+    }],
+  };
+}
+
+async function regionSuite() {
+  console.log('\ncollectRegions:');
+  const viewport = { width: 1000, height: 2000, scrollX: 0, scrollY: 0 };
+
+  await test('surfaces unnamed canvas/img; skips named, hidden, nested, titled, zero-size', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'DIV',    parent: -1, backend: 100 },
+      { tag: 'CANVAS', parent: 0,  backend: 101, bounds: [10, 10, 200, 100] },               // ✓ unnamed canvas
+      { tag: 'IMG',    parent: 0,  backend: 102, attrs: { alt: 'product' }, bounds: [10, 120, 50, 50] }, // ✗ alt present
+      { tag: 'IMG',    parent: 0,  backend: 103, bounds: [10, 180, 50, 50] },                // ✓ alt-less img
+      { tag: 'BUTTON', parent: 0,  backend: 104, bounds: [10, 240, 40, 40] },
+      { tag: 'svg',    parent: 4,  backend: 105, bounds: [12, 242, 16, 16] },                // ✗ icon inside button
+      { tag: 'svg',    parent: 0,  backend: 106, bounds: [10, 300, 80, 80] },                // ✗ has <title> child
+      { tag: 'title',  parent: 6,  backend: 107 },
+      { tag: 'CANVAS', parent: 0,  backend: 108, attrs: { 'aria-hidden': 'true' }, bounds: [10, 400, 300, 200] }, // ✗ aria-hidden
+      { tag: 'CANVAS', parent: 0,  backend: 109, bounds: [10, 620, 0, 0] },                  // ✗ zero-area
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    const regions = collectRegions(snapshot, maps, viewport, {});
+    assert.deepStrictEqual(regions.map(r => r.role), ['canvas', 'image'], 'only the two unnamed graphics surface');
+    assert.deepStrictEqual(regions[0].bbox, { x: 10, y: 10, width: 200, height: 100 }, 'canvas bbox in CSS px');
+    assert.strictEqual(regions[0].inViewport, true);
+    assert.strictEqual(regions[0].backendNodeId, 101, 'carries node id for lookup + crop');
+    assert.strictEqual(regions[1].backendNodeId, 103);
+  });
+
+  await test('cross-origin iframe (no embedded doc) → an iframe region; same-origin does not', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'DIV',    parent: -1, backend: 300 },
+      { tag: 'IFRAME', parent: 0,  backend: 301, bounds: [0, 0, 400, 300] },                                  // ✓ cross-origin: no content doc in snapshot
+      { tag: 'IFRAME', parent: 0,  backend: 302, bounds: [0, 320, 400, 300], contentDoc: true },              // ✗ same-origin: doc embedded + already extracted
+      { tag: 'IFRAME', parent: 0,  backend: 303, attrs: { 'aria-hidden': 'true' }, bounds: [0, 700, 400, 300] }, // ✗ hidden from a11y
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    const regions = collectRegions(snapshot, maps, viewport, {});
+    assert.deepStrictEqual(regions.map(r => r.role), ['iframe'], 'only the cross-origin iframe surfaces');
+    assert.strictEqual(regions[0].backendNodeId, 301);
+  });
+
+  await test('aria-label names a graphic; inViewportOnly drops off-screen regions', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'CANVAS', parent: -1, backend: 200, attrs: { 'aria-label': 'Revenue chart' }, bounds: [0, 0, 100, 100] }, // ✗ named
+      { tag: 'CANVAS', parent: -1, backend: 201, bounds: [0, 5000, 100, 100] },              // off-screen (y beyond viewport)
+    ]);
+    const maps = buildSnapshotMaps(snapshot);
+    assert.strictEqual(collectRegions(snapshot, maps, viewport, {}).length, 1, 'off-screen still listed without the filter');
+    assert.strictEqual(collectRegions(snapshot, maps, viewport, { inViewportOnly: true }).length, 0, 'inViewportOnly drops it');
+  });
+}
+
+async function screenshotSuite() {
+  console.log('\nscreenshot (crop):');
+  const { screenshot } = require('../lib/screenshot');
+  const visionMod = require('../lib/vision');
+  const origDescribe = visionMod.describe;
+  visionMod.describe = async () => 'a description';   // no network/LLM in unit tests
+
+  const fakeSession = () => {
+    const calls = [];
+    return { calls, client: { Page: { captureScreenshot: async (p) => { calls.push(p); return { data: 'BASE64PNG' }; } } } };
+  };
+
+  try {
+    await test('no ref → whole viewport, no clip', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief() });
+      assert.strictEqual(s.calls[0].clip, undefined, 'no clip param');
+      assert.strictEqual(s.calls[0].captureBeyondViewport, undefined);
+      assert.strictEqual(out.cropped, false);
+    });
+
+    await test('region ref → clip from its bbox, captureBeyondViewport on (off-screen ok)', async () => {
+      const s = fakeSession();
+      const brief = makeBrief({
+        regions: [{ ref: '@r1', role: 'canvas', bbox: { x: 5, y: 600, width: 640, height: 480 }, inViewport: false }],
+      });
+      const out = await screenshot({ session: s, brief, ref: '@r1' });
+      assert.deepStrictEqual(s.calls[0].clip, { x: 5, y: 600, width: 640, height: 480, scale: 1 });
+      assert.strictEqual(s.calls[0].captureBeyondViewport, true, 'off-screen graphic captured without scrolling');
+      assert.strictEqual(out.cropped, true);
+      assert.strictEqual(out.ref, '@r1');
+    });
+
+    await test('element ref with array bbox is normalized to a clip', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief(), ref: '@e1' });  // bbox [100,200,300,40]
+      assert.deepStrictEqual(s.calls[0].clip, { x: 100, y: 200, width: 300, height: 40, scale: 1 });
+      assert.strictEqual(out.cropped, true);
+    });
+
+    await test('unknown/boxless ref degrades to a full-viewport capture', async () => {
+      const s = fakeSession();
+      const out = await screenshot({ session: s, brief: makeBrief(), ref: '@r9' });
+      assert.strictEqual(s.calls[0].clip, undefined);
+      assert.strictEqual(out.cropped, false);
+    });
+
+    await test('quality tiers by ref: a cropped read is higher quality than a describe', async () => {
+      const s1 = fakeSession();
+      const out1 = await screenshot({ session: s1, brief: makeBrief() });   // no ref → describe
+      const s2 = fakeSession();
+      const brief = makeBrief({ regions: [{ ref: '@r1', role: 'canvas', bbox: { x: 0, y: 0, width: 100, height: 100 }, inViewport: true }] });
+      const out2 = await screenshot({ session: s2, brief, ref: '@r1' });     // ref → cropped read
+      assert.strictEqual(s1.calls[0].format, 'jpeg');
+      assert.strictEqual(s2.calls[0].format, 'jpeg');
+      assert.ok(s2.calls[0].quality > s1.calls[0].quality, 'cropped read encoded at higher quality than a full-page describe');
+      assert.strictEqual(out1.mimeType, 'image/jpeg');
+      assert.strictEqual(out1.ext, 'jpg');
+    });
+  } finally {
+    visionMod.describe = origDescribe;
+  }
 }
 
 async function validateSuite() {
@@ -239,6 +406,31 @@ async function validateSuite() {
   await test('tolerates extra args', () => {
     const { ok } = validate([action('press', { args: { key: 'Enter', bogus: 1 } })], {}, registry);
     assert.strictEqual(ok.length, 1);
+  });
+
+  await test('take_screenshot: optional ref — accepts @e/@t/@r, valid with none', () => {
+    const lookup = { '@e1': 111, '@t1': 222, '@r1': 333 };
+    for (const ref of ['@e1', '@t1', '@r1']) {
+      const { ok, errors } = validate([action('take_screenshot', { ref })], lookup, registry);
+      assert.strictEqual(ok.length, 1, `${ref} accepted: ${JSON.stringify(errors)}`);
+    }
+    const { ok } = validate([action('take_screenshot')], lookup, registry);
+    assert.strictEqual(ok.length, 1, 'no ref is valid — full-viewport capture');
+  });
+
+  await test('take_screenshot: a present-but-unknown ref is rejected', () => {
+    const { ok, errors } = validate([action('take_screenshot', { ref: '@r9' })], { '@r1': 333 }, registry);
+    assert.strictEqual(ok.length, 0);
+    assert.match(errors[0].error, /not present in current snapshot/);
+  });
+
+  await test('only take_screenshot accepts an @r ref; click/selectText reject it', () => {
+    const lookup = { '@r1': 333 };
+    for (const verb of ['click', 'selectText']) {
+      const { ok, errors } = validate([action(verb, { ref: '@r1' })], lookup, registry);
+      assert.strictEqual(ok.length, 0, `${verb} must reject @r`);
+      assert.match(errors[0].error, /requires ref type/);
+    }
   });
 
   await test('malformed action records an error instead of throwing', () => {
@@ -901,6 +1093,8 @@ async function postJSONSuite() {
 
 (async () => {
   await reduceSuite();
+  await regionSuite();
+  await screenshotSuite();
   await validateSuite();
   await executeSuite();
   await configSuite();

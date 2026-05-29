@@ -348,7 +348,7 @@ test('bboxArr: rounds floats and returns array', () => {
     });
 
     // ─── Ref / lookup convention ─────────────────────────────────────────────
-    const REF_RE = /^@[et]\d+$/;
+    const REF_RE = /^@[etr]\d+$/;
 
     function assertRefInvariants(records, lookup, prefix) {
       const refs = records.map(r => r.ref);
@@ -377,7 +377,8 @@ test('bboxArr: rounds floats and returns array', () => {
       assert.ok(result.lookup);
       assertRefInvariants(result.elements, result.lookup, '@e');
       assertRefInvariants(result.text, result.lookup, '@t');
-      const usedRefs = new Set([...result.elements, ...result.text].map(r => r.ref));
+      assertRefInvariants(result.regions || [], result.lookup, '@r');
+      const usedRefs = new Set([...result.elements, ...result.text, ...(result.regions || [])].map(r => r.ref));
       const lookupKeys = new Set(Object.keys(result.lookup));
       assert.deepStrictEqual(lookupKeys, usedRefs, 'lookup keys should equal set of used refs');
     });
@@ -387,6 +388,7 @@ test('bboxArr: rounds floats and returns array', () => {
       assert.strictEqual(result.schemaVersion, '2.0');
       assertRefInvariants(result.elements, result.lookup, '@e');
       assertRefInvariants(result.text, result.lookup, '@t');
+      assertRefInvariants(result.regions || [], result.lookup, '@r');
     });
 
     await testAsync('tree mode: leaves carry refs, lookup covers them', async () => {

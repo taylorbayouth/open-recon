@@ -57,12 +57,21 @@ The output of `extract.js`. Already implemented (`schemaVersion: "2.0"`). One ad
   "viewport": { "width": …, "height": …, "scrollX": …, "scrollY": … },
   "elements": [ { "ref": "@e1", "role": "button", "name": "...", "bbox": [...] }, … ],
   "text":     [ { "ref": "@t1", "role": "heading", "name": "...", "level": 2, … }, … ],
-  "lookup":   { "@e1": 1276, "@t1": 1419 },
+  "regions":  [ { "ref": "@r1", "role": "canvas", "bbox": [...], "inViewport": true }, … ],
+  "lookup":   { "@e1": 1276, "@t1": 1419, "@r1": 1502 },
   "stats":    { … }
 }
 ```
 
 `briefHash` is computed over a canonical serialization: sorted refs and their resolved data, viewport, url, title. Timestamps, `elapsedMs`, and other ephemeral fields are excluded. Two semantically-identical pages produce the same hash.
+
+**Unreadable regions** (`regions`) are the parts of the page the accessibility tree can't describe: a rendered `<canvas>`, an `<img>` with no `alt`, an `<svg>` with no accessible name, or a **cross-origin `<iframe>`**. Their content (chart, map, scanned text, CAPTCHA, embedded login form) isn't text in our tree, so it never appears in `elements`/`text`. `extract.js` reads them straight from the DOMSnapshot — tag + attributes + layout — and emits a region for each rendered graphic that has **no accessible name** and is **not nested in a link/button** (those are control icons, already represented by the control). This is a deterministic structural fact, not a heuristic about whether content is "missing": we report that a nameless graphic is painted here, and the planner decides whether it matters.
+
+The cross-origin iframe case uses the same report-the-fact principle. A cross-origin iframe is an out-of-process frame (OOPIF): its document runs in a different renderer, so it's absent from our single `captureSnapshot`, and its text/elements never reach the brief. We detect this structurally — DOMSnapshot's `nodes.contentDocumentIndex` points an `<iframe>` at its embedded document **only for same-process frames** (whose content we already extract); an `<iframe>` with no such index is cross-origin (or unloaded) and unreadable from the DOM. We surface it as an `iframe` region so the model can read it via a cropped screenshot — the composited capture already includes cross-origin pixels — without the full multi-target OOPIF stitching that per-element refs inside the frame would require. Only `<iframe>` is handled; legacy `<frame>`/`<frameset>` are out of scope.
+
+Each region gets an `@r` ref and a `lookup` entry (like `@e`/`@t`), and renders in the LLMView as an `[@rN]` line in reading order. The ref is accepted **only by `take_screenshot`** — `click`/`type`/`selectText` reject `@r` at validation. When `take_screenshot` is given any ref (`@e`/`@t`/`@r`, all optional), the executor resolves it to that node's bbox and passes a `clip` to `Page.captureScreenshot` with `captureBeyondViewport:true`, so the capture is cropped to the element's DOM rectangle — exactly, with no model-supplied coordinates, even if the element is scrolled off-screen. With no ref, it captures the full viewport as before (fully backward-compatible). An unresolvable ref degrades to a full-viewport capture rather than failing. Region *presence* (role only, not bbox) is included in `briefHash`, so a page gaining or losing a graphic re-prompts.
+
+The capture encoding (`config.screenshot`) is tiered on this same ref/crop distinction. The vision model downscales internally, so a lossless PNG wastes bytes, image tokens, and disk. A full-viewport *describe* (no ref) tolerates heavy JPEG compression (`quality`, default 55); a cropped *read* (ref present — usually small text, chart labels, or a CAPTCHA) is effectively OCR where artifacts eat thin glyphs, so it uses a higher `croppedQuality` (default 92). The chosen mime/ext rides back on the observation so the saved artifact matches the bytes.
 
 ### LLMView
 
