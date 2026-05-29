@@ -362,6 +362,37 @@ async function screenshotSuite() {
   }
 }
 
+async function osGateSuite() {
+  console.log('\nos backend (input gate):');
+  const { ensureInputSafe } = require('../lib/executors/os');
+
+  // Minimal fake of the session's CDP client: send() answers the gate probes,
+  // Page.bringToFront records the raise. idleGuard disabled so gate 2 is skipped.
+  const fakeClient = (overrides = {}) => ({
+    verbose: false,
+    idleGuard: { enabled: false, thresholdMs: 0 },
+    send: async ({ op }) => (op === 'frontapp' ? { bundleId: 'com.google.Chrome' } : {}),
+    Page: { bringToFront: async () => {} },
+    ...overrides,
+  });
+
+  await test('raises the current target to front once both gates pass', async () => {
+    const calls = [];
+    const client = fakeClient({
+      send: async ({ op }) => { calls.push(op); return op === 'frontapp' ? { bundleId: 'com.google.Chrome' } : {}; },
+      Page: { bringToFront: async () => { calls.push('bringToFront'); } },
+    });
+    await ensureInputSafe(client);
+    assert.ok(calls.includes('frontapp'), 'checked Chrome is frontmost');
+    assert.ok(calls.includes('bringToFront'), 'raised the current target window so input lands on it');
+  });
+
+  await test('a failed bringToFront does not abort the input', async () => {
+    const client = fakeClient({ Page: { bringToFront: async () => { throw new Error('no Page domain'); } } });
+    await ensureInputSafe(client);   // must resolve, not throw — raise is best-effort
+  });
+}
+
 async function validateSuite() {
   console.log('\nvalidate:');
 
@@ -1095,6 +1126,7 @@ async function postJSONSuite() {
   await reduceSuite();
   await regionSuite();
   await screenshotSuite();
+  await osGateSuite();
   await validateSuite();
   await executeSuite();
   await configSuite();

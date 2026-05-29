@@ -8,7 +8,7 @@ const CDP = require('chrome-remote-interface');
 
 const { flattenProperties, isInViewport, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
-const { connect } = require('../lib/connect');
+const { connect, chooseTab } = require('../lib/connect');
 
 // ─── Test runner ──────────────────────────────────────────────────────────────
 
@@ -154,6 +154,59 @@ test('isCursorClickable: semantic roles are excluded (handled by role/text paths
 test('bboxArr: rounds floats and returns array', () => {
   const result = bboxArr({ x: 1.7, y: 2.3, width: 100.9, height: 50.1 });
   assert.deepStrictEqual(result, [2, 2, 101, 50]);
+});
+
+// ─── chooseTab: tab-following policy (pure) ──────────────────────────────────
+// Models the OAuth/popup lifecycle: open a popup, then close it and return.
+
+test('chooseTab: follows a popup our tab opened (openerId), newest wins', () => {
+  const pages = [
+    { targetId: 'A', openerId: undefined },           // our tab
+    { targetId: 'pop1', openerId: 'A' },              // first popup
+    { targetId: 'pop2', openerId: 'A' },              // second popup (newer)
+  ];
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
+  assert.strictEqual(got, 'pop2');
+});
+
+test('chooseTab: ignores unrelated background tabs on the first poll (no baseline)', () => {
+  const pages = [
+    { targetId: 'A', openerId: undefined },           // our tab
+    { targetId: 'bg', openerId: undefined },          // pre-existing, not opened by us
+  ];
+  // Empty knownIds = first poll: a pre-existing tab must NOT be treated as fresh.
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set() });
+  assert.strictEqual(got, null);
+});
+
+test('chooseTab: follows a brand-new no-opener tab once we have a baseline', () => {
+  const pages = [
+    { targetId: 'A', openerId: undefined },
+    { targetId: 'new', openerId: undefined },         // appeared since last poll (e.g. _blank rel=noopener)
+  ];
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
+  assert.strictEqual(got, 'new');
+});
+
+test('chooseTab: when our tab closes, returns to its opener (the OAuth round-trip)', () => {
+  const pages = [
+    { targetId: 'A', openerId: undefined },           // opener still open
+    { targetId: 'other', openerId: undefined },
+  ];
+  // currentId 'pop' is gone from pages; we recorded its opener as 'A'.
+  const got = chooseTab({ pages, currentId: 'pop', openerId: 'A', knownIds: new Set(['A', 'pop', 'other']) });
+  assert.strictEqual(got, 'A');
+});
+
+test('chooseTab: closed tab with a vanished opener falls back to the newest page', () => {
+  const pages = [{ targetId: 'X', openerId: undefined }, { targetId: 'Y', openerId: undefined }];
+  const got = chooseTab({ pages, currentId: 'pop', openerId: 'gone', knownIds: new Set(['pop']) });
+  assert.strictEqual(got, 'Y');
+});
+
+test('chooseTab: stays put when nothing changed', () => {
+  const pages = [{ targetId: 'A', openerId: undefined }];
+  assert.strictEqual(chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) }), null);
 });
 
 // ─── Integration tests (requires Chrome running on port 9222) ────────────────
@@ -403,6 +456,45 @@ test('bboxArr: rounds floats and returns array', () => {
       for (const ref of leafRefs) {
         assert.ok(REF_RE.test(ref), `ref "${ref}" should match ${REF_RE}`);
         assert.strictEqual(typeof result.lookup[ref], 'number', `lookup["${ref}"] missing`);
+      }
+    });
+
+    // ─── HiDPI: region bbox is CSS-px and the crop clip maps correctly ────────
+    // The coordinate-space risk that fakes can't catch: extract divides snapshot
+    // bounds by devicePixelRatio, and the screenshot clip rides on those bounds.
+    // We force a 2× display via Emulation so this is deterministic regardless of
+    // the physical screen, then check the fixed canvas surfaces at its CSS rect
+    // (NOT doubled) and that a clip capture is scaled by the device ratio.
+    await testAsync('HiDPI (2×): canvas region is CSS-px; crop clip maps correctly', async () => {
+      const { clipForRef } = require('../lib/screenshot');
+      await session.client.Emulation.setDeviceMetricsOverride({ width: 1000, height: 800, deviceScaleFactor: 2, mobile: false });
+      try {
+        await new Promise(r => setTimeout(r, 300));
+        const brief = await session.extract({ format: 'lean' });
+        const canvas = (brief.regions || []).find(r => r.role === 'canvas');
+        assert.ok(canvas, 'fixed canvas should surface as an unreadable region');
+
+        // The crux: bounds come back in CSS px (~40,50,160,90), not device px
+        // (~80,100,320,180). A wrong dpr-divide would double these.
+        const b = canvas.bbox;
+        assert.ok(Math.abs(b.x - 40) <= 2 && Math.abs(b.y - 50) <= 2, `canvas at CSS (${b.x},${b.y}), expected ~(40,50)`);
+        assert.ok(Math.abs(b.width - 160) <= 2 && Math.abs(b.height - 90) <= 2, `canvas ${b.width}×${b.height}, expected ~160×90`);
+
+        // Our clip is exactly the bbox; verify, then capture it for real.
+        const clip = clipForRef(brief, canvas.ref);
+        assert.deepStrictEqual(clip, { x: b.x, y: b.y, width: b.width, height: b.height, scale: 1 });
+
+        const { data } = await session.client.Page.captureScreenshot({ format: 'png', clip, captureBeyondViewport: true });
+        const png = Buffer.from(data, 'base64');
+        const w = png.readUInt32BE(16), h = png.readUInt32BE(20);   // PNG IHDR width/height
+        // scale:1 on a 2× display → the cropped image is the clip scaled by dpr.
+        // Assert we're clearly in the 2× regime (not 1×, not the whole viewport),
+        // and that the crop kept the canvas's aspect ratio.
+        assert.ok(w / b.width > 1.5 && w / b.width < 2.5, `crop width ${w} ≈ ${b.width}×2`);
+        assert.ok(h / b.height > 1.5 && h / b.height < 2.5, `crop height ${h} ≈ ${b.height}×2`);
+        assert.ok(Math.abs((w / h) - (b.width / b.height)) < 0.1, 'crop preserved the canvas aspect ratio');
+      } finally {
+        await session.client.Emulation.clearDeviceMetricsOverride().catch(() => {});
       }
     });
 

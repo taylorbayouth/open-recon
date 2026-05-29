@@ -285,6 +285,12 @@ screen.y = window.top  + chromeOffsetY + (pageY - scrollY)
 - `chromeOffsetY` — Chrome's title + tab + URL bar height. Computed as `windowBounds.height - cssVisualViewport.clientHeight`.
 - `chromeOffsetX` — usually 0; computed analogously for completeness.
 
+`window`/scroll/offset are all resolved per-dispatch against the session's **current** target (`Browser.getWindowForTarget(targetId)`), so after the session follows a popup or new tab (see below) the math automatically tracks that window. Because CGEvents land on whichever window is topmost at the screen point, the input gate (`ensureInputSafe`) calls `Page.bringToFront()` on the current target once its safety gates clear — so a followed popup is raised above any window behind it before the click lands.
+
+### Tab following (multi-tab / popups)
+
+A click that opens a popup or new tab (OAuth/sign-in flows do this constantly) leaves the CDP session pinned to the original tab. `Session.followActiveTab` (run before each snapshot) re-pins to where the action landed, reading CDP's target graph rather than guessing from OS window focus. The pure policy `chooseTab` decides: follow a popup our tab opened (`openerId` — which `window.open` popups always keep, since they `postMessage` results back to the opener); else a brand-new target that appeared since the last poll; and when our tab closes, return to its opener (the OAuth round-trip). Deterministic and cross-platform. Per-element interaction *inside* a cross-origin (OOPIF) tab still needs multi-target stitching and is out of scope.
+
 This avoids a hand-tuned constant for Chrome's chrome — the offset is recomputed every dispatch, so it's robust to user toggling the bookmarks bar or zoom.
 
 ### Humanize config
@@ -564,7 +570,7 @@ Three verbs, happy path, one provider. Goal: get a real brief through a real LLM
 
 - Caching seams activated (in order of impact: Anthropic prompt cache → brief diff → element resolution → LLMView).
 - Eval harness: replay a saved Run against a different model.
-- Multi-tab support (deferred; needs a real use case first).
+- Multi-tab support: implemented for following popups/new tabs (see Tab following). Per-element interaction inside a cross-origin OOPIF tab remains deferred.
 
 ---
 
