@@ -181,11 +181,38 @@ test('chooseTab: ignores unrelated background tabs on the first poll (no baselin
 
 test('chooseTab: follows a brand-new no-opener tab once we have a baseline', () => {
   const pages = [
-    { targetId: 'A', openerId: undefined },
-    { targetId: 'new', openerId: undefined },         // appeared since last poll (e.g. _blank rel=noopener)
+    { targetId: 'A', type: 'page', url: 'https://example.test', openerId: undefined },
+    { targetId: 'new', type: 'page', url: 'https://jobs.example.test', openerId: undefined },
   ];
   const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
   assert.strictEqual(got, 'new');
+});
+
+test('chooseTab: ignores extension side panels even when they are fresh page targets', () => {
+  const pages = [
+    { targetId: 'A', type: 'page', url: 'https://www.linkedin.com/jobs/', openerId: undefined },
+    { targetId: 'ext', type: 'page', url: 'chrome-extension://abc/sidepanel.html', openerId: undefined },
+  ];
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
+  assert.strictEqual(got, null);
+});
+
+test('chooseTab: ignores extension children opened by the current tab', () => {
+  const pages = [
+    { targetId: 'A', type: 'page', url: 'https://www.linkedin.com/jobs/', openerId: undefined },
+    { targetId: 'ext', type: 'page', url: 'chrome-extension://abc/sidepanel.html', openerId: 'A' },
+  ];
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
+  assert.strictEqual(got, null);
+});
+
+test('chooseTab: ignores chrome internals other than new-tab startup pages', () => {
+  const pages = [
+    { targetId: 'A', type: 'page', url: 'https://www.linkedin.com/jobs/', openerId: undefined },
+    { targetId: 'settings', type: 'page', url: 'chrome://settings/', openerId: undefined },
+  ];
+  const got = chooseTab({ pages, currentId: 'A', openerId: null, knownIds: new Set(['A']) });
+  assert.strictEqual(got, null);
 });
 
 test('chooseTab: when our tab closes, returns to its opener (the OAuth round-trip)', () => {

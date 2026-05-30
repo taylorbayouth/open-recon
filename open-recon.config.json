@@ -35,6 +35,8 @@
       "mouseJitterPx": 2,
       "keystrokeDelayMsMin": 25,
       "keystrokeDelayMsMax": 85,
+      "postFocusPauseMs": 80,
+      "postClearPauseMs": 50,
       "preClickPauseMsMin": 40,
       "preClickPauseMsMax": 160,
       "scrollDurationMs": 400,
