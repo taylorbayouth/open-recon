@@ -475,39 +475,66 @@ The known limitation: an event log captures actions, navigations, and errors, bu
 
 ### Interface
 
-Every provider exports the same shape:
+Every provider is an **adapter** conforming to `lib/providers/types.d.ts` (advisory
+JS types — no build step):
 
 ```js
 module.exports = {
-  name: 'anthropic',                 // 'openai' | 'ollama'
+  name: 'anthropic',
   defaultModel: 'claude-opus-4-7',
-  /**
-   * @param {{
-   *   system: string,
-   *   tools: object[],               // generic tool definitions
-   *   messages: object[],            // generic message shape (see Loop)
-   *   model?: string,
-   *   signal?: AbortSignal
-   * }} req
-   * @returns {Promise<Completion>}   // returns full Completion artifact
-   */
-  async plan(req) { … }
+  defaultVisionModel: 'claude-opus-4-7',
+  capabilities: { reasoningEffort: false, vision: true, toolUse: 'native', cache: 'explicit' },
+  async plan(req) { … },       // planning/tool-calling → Completion
+  async describe(req) { … },   // single-shot vision (image in, prose out) → VisionResult
 };
 ```
 
-`plan.js` is a thin facade that picks a provider by name and forwards the call. It does no translation — that's the provider's job.
+```
+plan req     = { system, tools, messages, model, cacheKey, reasoningEffort, maxTokens, signal }
+describe req = { model, prompt, imageBase64, mimeType, maxTokens, signal }
+```
+
+Both envelopes (`Completion`, `VisionResult`) are built by `_shared.js`, so every
+provider returns the same shape and the loop stays provider-agnostic.
+
+### Registry & self-registration
+
+Adapters self-register in `lib/providers/index.js` via `register()`, which
+shape-checks each adapter against the contract at load time (a clear error beats
+a deep runtime throw; the `vision: true` capability requires a `describe()`).
+The registry is a mutable object keyed by name — `plan.js` looks adapters up by
+name, and tests inject a fake adapter by direct assignment. Set
+`OPEN_RECON_SKIP_ADAPTER_CHECK=1` to bypass the guard.
+
+### Capability-aware dispatch
+
+`plan()` consults `adapter.capabilities` and strips request fields the adapter
+can't use — today, `reasoningEffort` for providers that don't support it —
+emitting a one-time warning instead of letting the field be silently ignored.
+
+### Error taxonomy & redaction
+
+Provider failures from `_shared.postJSON` carry a normalized `err.type`
+(`auth | rate_limit | invalid_request | server | timeout | network |
+invalid_response | aborted`) plus `provider`, `status`, and `retriable`, so the
+loop reacts uniformly rather than string-matching messages (it records
+`errorType` on the Run and surfaces it). Error strings pass through `redact()`,
+which scrubs credential-shaped substrings (`Bearer …`, `sk-…`, `AIza…`,
+`?key=…`) before they're thrown or logged — defense-in-depth, since keys live in
+headers, not bodies.
 
 ### Selection & defaults
 
-Provider is resolved in this order: the `provider` arg to `plan()` / `run()` → `OPEN_RECON_PROVIDER` env → `DEFAULT_PROVIDER` (`'openai'`). Mirrors the executor selection pattern.
+Provider is resolved in this order: the `provider` arg to `plan()` / `run()` → `OPEN_RECON_PROVIDER` env → `DEFAULT_PROVIDER` (`'openai'`). Mirrors the executor selection pattern. The vision provider/model are configured independently under `config.vision` (see `lib/vision.js`, which owns prompt/normalization and dispatches through the registry).
 
-| Provider | Module | Default model | Credentials | Temperature |
-|---|---|---|---|---|
-| `openai` (default) | `providers/openai.js` | `gpt-5.4-mini` | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL` override) | omitted — the mini model rejects non-default temperature |
-| `anthropic` | `providers/anthropic.js` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` | forced `0` |
-| `ollama` | `providers/ollama.js` | `llama3.1` | none (local server; `OLLAMA_HOST` override) | forced `0` |
+| Provider | Module | Default model | Vision model | Credentials | Caching |
+|---|---|---|---|---|---|
+| `openai` (default) | `providers/openai.js` | `gpt-5.4-mini` | `gpt-5.4-mini` | `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | automatic |
+| `anthropic` | `providers/anthropic.js` | `claude-opus-4-7` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) | explicit breakpoints |
+| `gemini` | `providers/gemini.js` | `gemini-3.1-pro` | `gemini-3.5-flash` | `GEMINI_API_KEY` (+ `GEMINI_BASE_URL`) | implicit + explicit |
+| `ollama` | `providers/ollama.js` | `llama3.1` | `llama3.2-vision` | none (local; `OLLAMA_HOST`) | local KV |
 
-`openai`, `anthropic`, and `ollama` are all implemented with native `fetch` (no vendor SDK), sharing the request/retry/Completion scaffolding in `_shared.js`. All three speak the same generic `{ system, tools, messages }` request and return the same `Completion` artifact, so the loop is provider-agnostic.
+All four are implemented with native `fetch` (no vendor SDK), sharing the request/retry/Completion scaffolding in `_shared.js`. They speak the same generic `{ system, tools, messages }` request and return the same `Completion` artifact, so the loop is provider-agnostic.
 
 ### Tool definitions
 
@@ -519,7 +546,7 @@ Generated once per Run from `actions.js`:
 …
 ```
 
-Each provider's `plan()` translates these generic tool defs into its native format (Anthropic tool_use, OpenAI function calling, Ollama prompt-embedded). The rest of the engine doesn't care.
+Each provider's `plan()` translates these generic tool defs into its native format (Anthropic `tool_use`, OpenAI / Ollama function calling, Gemini `functionDeclarations`). The rest of the engine doesn't care.
 
 ---
 

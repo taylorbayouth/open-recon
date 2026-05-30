@@ -1,8 +1,16 @@
 # Model Adapters — Design Spec
 
-**Status:** Proposed (spec only — no code changes yet)
+**Status:** Implemented (Phases 1–5, 7) · Phase 6 dropped by decision
 **Branch:** `claude/model-adapters-package-scope-qpMT5`
 **Author:** generated for review, 2026-05-30
+
+> **Implementation note (update):** Phases 1–5 and 7 are built and tested.
+> **Phase 6 (config Option B: `providers` + `roles`) was dropped** — the flat
+> config (Option A) already supports a separate planner vs. vision model, and the
+> valuable half of Option B (a `providers` block owning endpoints/keys) duplicates
+> what `.env` already does. Credentials stay in environment variables, where
+> secrets belong. The §6 design below is retained for the record but is not
+> implemented.
 
 > This is a written design spec, intended to be approved before any implementation.
 > It is grounded in the current code (file:line references throughout) and in
