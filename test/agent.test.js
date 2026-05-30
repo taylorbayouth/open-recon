@@ -854,6 +854,22 @@ async function scratchpadSuite() {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  await test('saveAsset suffixes colliding sanitized filenames', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const first = scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('first').toString('base64'), summary: 'first' });
+      const second = scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('second').toString('base64'), summary: 'second' });
+
+      assert.strictEqual(first.name, 'report.pdf');
+      assert.strictEqual(second.name, 'report-2.pdf');
+      assert.strictEqual(fs.readFileSync(first.path, 'utf8'), 'first');
+      assert.strictEqual(fs.readFileSync(second.path, 'utf8'), 'second');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 }
 
 async function logSuite() {
