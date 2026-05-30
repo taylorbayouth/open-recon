@@ -1467,17 +1467,19 @@ async function cacheSuite() {
     assert.deepStrictEqual(toAnthropicTools(undefined), []);
   });
 
-  await test('openai: reasoning_effort is sent when set, omitted when null', async () => {
+  await test('openai: reasoning effort uses Responses API and null stays on Chat', async () => {
     const openai = require('../lib/providers/openai');
     const origFetch = global.fetch;
     const origKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'test-key';
-    let captured = null;
-    global.fetch = async (_url, opts) => {
-      captured = JSON.parse(opts.body);
+    const captured = [];
+    global.fetch = async (url, opts) => {
+      captured.push({ url, body: JSON.parse(opts.body) });
       return {
         ok: true, status: 200,
-        json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: {} }),
+        json: async () => String(url).endsWith('/responses')
+          ? ({ output: [], usage: {} })
+          : ({ choices: [{ message: { content: 'ok' } }], usage: {} }),
         text: async () => '',
         headers: { get: () => null },
       };
@@ -1485,9 +1487,12 @@ async function cacheSuite() {
     try {
       const base = { system: 's', tools: [], messages: [{ role: 'user', content: 'hi' }] };
       await openai.plan({ ...base, reasoningEffort: 'high' });
-      assert.strictEqual(captured.reasoning_effort, 'high', 'forwarded to the request body');
+      assert.ok(captured[0].url.endsWith('/responses'), 'reasoning requests use Responses API');
+      assert.deepStrictEqual(captured[0].body.reasoning, { effort: 'high' }, 'forwarded to the Responses request body');
       await openai.plan({ ...base, reasoningEffort: null });
-      assert.strictEqual('reasoning_effort' in captured, false, 'omitted when null (non-reasoning models reject it)');
+      assert.ok(captured[1].url.endsWith('/chat/completions'), 'null reasoning uses Chat Completions');
+      assert.strictEqual('reasoning' in captured[1].body, false, 'omitted when null (non-reasoning models reject it)');
+      assert.strictEqual('reasoning_effort' in captured[1].body, false, 'old Chat field remains omitted');
     } finally {
       global.fetch = origFetch;
       if (origKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = origKey;
