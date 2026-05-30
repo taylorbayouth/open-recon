@@ -1732,6 +1732,40 @@ async function postJSONSuite() {
     } finally { global.fetch = origFetch; }
   });
 
+  await test('tags errors with the normalized taxonomy (auth/rate_limit/server)', async () => {
+    const cases = [
+      [401, 'auth', false],
+      [403, 'auth', false],
+      [429, 'rate_limit', true],
+      [500, 'server', true],
+      [404, 'invalid_request', false],
+    ];
+    for (const [status, type, retriable] of cases) {
+      global.fetch = async () => res(status, { error: 'x' });
+      try {
+        // retries:0 so the terminal throw carries the tag for the retriable ones too
+        await postJSON('http://x', { body: {}, retries: 0, label: 'T' });
+        assert.fail(`expected ${status} to throw`);
+      } catch (err) {
+        assert.strictEqual(err.type, type, `${status} → type ${type}`);
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.retriable, retriable, `${status} → retriable ${retriable}`);
+      } finally { global.fetch = origFetch; }
+    }
+  });
+
+  await test('redacts credential-shaped substrings in error messages', async () => {
+    global.fetch = async () => res(400, { error: 'bad key sk-ABC123456789 and AIzaSyABC123456789' });
+    try {
+      await postJSON('http://x?key=SECRETKEY123', { body: {}, retries: 0, label: 'T' });
+      assert.fail('expected throw');
+    } catch (err) {
+      assert.doesNotMatch(err.message, /sk-ABC123456789/, 'OpenAI-style key redacted');
+      assert.doesNotMatch(err.message, /AIzaSyABC123456789/, 'Google-style key redacted');
+      assert.match(err.message, /sk-\[redacted\]/);
+    } finally { global.fetch = origFetch; }
+  });
+
   await test('aborts on timeout and surfaces a timeout error', async () => {
     // Hang until aborted, then reject with the abort reason — like real fetch.
     global.fetch = (_url, opts) => new Promise((_, reject) => {
