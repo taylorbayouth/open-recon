@@ -7,12 +7,14 @@
 // Navigates to example.com and dumps the bounds scale logged by extract.js.
 
 const { connect } = require('./index');
+const { waitUntilLoaded } = require('./lib/executors/page');
 
 (async () => {
   const session = await connect({ port: 9222 });
   try {
-    await session.navigate('https://example.com');
-    await session.extract({ format: 'brief' });
+    await session.client.Page.navigate({ url: 'https://example.com' });
+    await waitUntilLoaded(session.client);
+    await session.extract({ format: 'lean' });
   } finally {
     await session.close();
   }
