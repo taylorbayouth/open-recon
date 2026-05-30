@@ -1489,6 +1489,94 @@ async function providerTranslationSuite() {
   });
 }
 
+// Gemini's wire format is distinct enough (contents/parts, systemInstruction,
+// wrapped tools, functionCall/functionResponse, user/model roles) that the
+// shared OpenAI/Anthropic translation doesn't cover it. Test the translation
+// directly, plus one fetch-stubbed round-trip — keyless, no network.
+async function geminiSuite() {
+  console.log('\ngemini provider:');
+  const gemini = require('../lib/providers/gemini');
+
+  await test('toGeminiTool produces { name, description, parameters }', () => {
+    const t = gemini.toGeminiTool({ name: 'click', description: 'd', inputSchema: { ref: 'string', hint: 'string?' } });
+    assert.strictEqual(t.name, 'click');
+    assert.strictEqual(t.parameters.type, 'object');
+    assert.deepStrictEqual(t.parameters.required, ['ref'], 'optional ? field not required');
+  });
+
+  await test('toGeminiContents: string content maps role assistant→model', () => {
+    const out = gemini.toGeminiContents([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'there' },
+    ]);
+    assert.deepStrictEqual(out, [
+      { role: 'user', parts: [{ text: 'hi' }] },
+      { role: 'model', parts: [{ text: 'there' }] },
+    ]);
+  });
+
+  await test('toGeminiContents: assistant tool_use → model functionCall part', () => {
+    const out = gemini.toGeminiContents([
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'click', input: { ref: '@e1' } }] },
+    ]);
+    assert.deepStrictEqual(out, [{ role: 'model', parts: [{ functionCall: { name: 'click', args: { ref: '@e1' } } }] }]);
+  });
+
+  await test('toGeminiContents: tool_result → user functionResponse part', () => {
+    const out = gemini.toGeminiContents([
+      { role: 'user', content: [{ type: 'tool_result', name: 'click', content: 'ok' }] },
+    ]);
+    assert.strictEqual(out[0].role, 'user');
+    assert.deepStrictEqual(out[0].parts[0].functionResponse, { name: 'click', response: { result: 'ok' } });
+  });
+
+  await test('parseActions: functionCall args (object) → Action with hoisted ref', () => {
+    const [a] = gemini.parseActions([{ functionCall: { name: 'type', args: { ref: '@e2', text: 'hi' } } }]);
+    assert.deepStrictEqual(a, { kind: 'action', verb: 'type', args: { text: 'hi' }, ref: '@e2', toolUseId: 'type' });
+  });
+
+  await test('plan: builds Gemini request and parses the response (fetch stubbed)', async () => {
+    const origFetch = global.fetch;
+    const origKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-key';
+    let captured;
+    global.fetch = async (url, opts) => {
+      captured = { url, headers: opts.headers, body: JSON.parse(opts.body) };
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ functionCall: { name: 'done', args: { result: 'ok' } } }] } }],
+          usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 3, cachedContentTokenCount: 7 },
+        }),
+        text: async () => '',
+        headers: { get: () => null },
+      };
+    };
+    try {
+      const out = await gemini.plan({
+        system: 'SYS',
+        tools: [{ name: 'done', description: 'finish', inputSchema: { result: 'string?' } }],
+        messages: [{ role: 'user', content: 'go' }],
+        model: 'gemini-3.1-pro',
+      });
+      // request shape
+      assert.ok(captured.url.endsWith('/v1beta/models/gemini-3.1-pro:generateContent'), 'model in URL path');
+      assert.strictEqual(captured.headers['x-goog-api-key'], 'test-key', 'auth via x-goog-api-key header');
+      assert.deepStrictEqual(captured.body.systemInstruction, { parts: [{ text: 'SYS' }] }, 'system → systemInstruction');
+      assert.ok(Array.isArray(captured.body.tools[0].functionDeclarations), 'tools wrapped in functionDeclarations');
+      assert.strictEqual(captured.body.toolConfig.functionCallingConfig.mode, 'ANY', 'forced tool call');
+      assert.strictEqual(captured.body.generationConfig.maxOutputTokens, 4096, 'maxTokens default → maxOutputTokens');
+      // response parsing
+      assert.deepStrictEqual(out.actions, [{ kind: 'action', verb: 'done', args: { result: 'ok' }, toolUseId: 'done' }]);
+      assert.strictEqual(out.provider, 'gemini');
+      assert.deepStrictEqual(out.usage, { inputTokens: 11, outputTokens: 3, cacheCreationTokens: null, cacheReadTokens: 7 });
+    } finally {
+      global.fetch = origFetch;
+      if (origKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = origKey;
+    }
+  });
+}
+
 async function cacheSuite() {
   console.log('\nprompt caching (provider breakpoints):');
   const { toAnthropicTools } = require('../lib/providers/anthropic');
@@ -1656,6 +1744,7 @@ async function postJSONSuite() {
   await linkPatchSuite();
   await memorySuite();
   await providerTranslationSuite();
+  await geminiSuite();
   await cacheSuite();
   await normalizeUrlSuite();
   await postJSONSuite();
