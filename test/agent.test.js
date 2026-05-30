@@ -21,7 +21,7 @@ const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
 const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/executors/page');
-const { createScratchpad } = require('../lib/scratchpad');
+const { createScratchpad, filenameStemFromHint } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
 
@@ -888,8 +888,33 @@ async function scratchpadSuite() {
       assert.ok(md.includes('### Captured note'));
       assert.ok(md.includes('- File: assets/note-1.txt'));
       assert.ok(md.includes('- Image: assets/screenshot-1.png'));
+      assert.ok(md.includes('![screenshot-1.png](assets/screenshot-1.png)'));
       assert.strictEqual(scratch.textCount, 1);
       assert.strictEqual(scratch.imageCount, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('filenameStemFromHint makes durable language slugs', () => {
+    assert.strictEqual(filenameStemFromHint('Read the chart labels & values!'), 'read-the-chart-labels-and-values');
+    assert.strictEqual(filenameStemFromHint('  Résumé / Q2 – totals  '), 'resume-q2-totals');
+    assert.strictEqual(filenameStemFromHint('---'), null);
+  });
+
+  await test('hinted screenshots include slug and supplied id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const image = scratch.saveImage({
+        base64: Buffer.from('jpg bytes').toString('base64'),
+        hint: 'Read chart labels',
+        id: 7,
+        ext: 'jpg',
+      });
+
+      assert.strictEqual(image.name, 'read-chart-labels-screenshot-7.jpg');
+      assert.ok(scratch.readMarkdown().includes('- Image: assets/read-chart-labels-screenshot-7.jpg'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -918,6 +943,25 @@ async function scratchpadSuite() {
       assert.strictEqual(second.name, 'report-2.pdf');
       assert.strictEqual(fs.readFileSync(first.path, 'utf8'), 'first');
       assert.strictEqual(fs.readFileSync(second.path, 'utf8'), 'second');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('hinted assets keep original extension and supplied id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const file = scratch.saveAsset({
+        filename: 'source report.pdf',
+        base64: Buffer.from('pdf').toString('base64'),
+        hint: 'Quarterly revenue report',
+        id: 12,
+      });
+
+      assert.strictEqual(file.name, 'quarterly-revenue-report-12.pdf');
+      assert.ok(scratch.readMarkdown().includes('- File: assets/quarterly-revenue-report-12.pdf'));
+      assert.ok(scratch.readMarkdown().includes('- Link: [quarterly-revenue-report-12.pdf](assets/quarterly-revenue-report-12.pdf)'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1308,6 +1352,31 @@ async function loopSuite() {
       assert.strictEqual(r.status, 'completed', r.error);
       assert.ok(fs.existsSync(reportPath), 'report.md exists even with no saves');
       assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Scratchpad\n\n_(nothing saved)_'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('finished run folds saved.md into report.md and removes saved.md', async () => {
+    installFakeProvider([[
+      action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } }),
+      action('done', { args: { result: 'ok' } }),
+    ]]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
+    try {
+      const r = await run({
+        session: makeFakeSession([makeBrief]),
+        task: 'finish with saved content',
+        config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
+      });
+      const runDir = path.join(dir, r.id);
+      const reportPath = path.join(runDir, 'report.md');
+      const savedPath = path.join(runDir, 'saved.md');
+      const report = fs.readFileSync(reportPath, 'utf8');
+
+      assert.strictEqual(r.status, 'completed', r.error);
+      assert.ok(report.includes('Full captured finding'), 'report includes saved.md content');
+      assert.ok(!fs.existsSync(savedPath), 'saved.md is removed after final report is written');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -114,7 +114,6 @@ Every run gets a workspace:
 ```text
 runs/<run-id>/
   report.md
-  saved.md
   assets/
     note-1.txt
     screenshot-1.jpg
