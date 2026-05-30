@@ -21,7 +21,7 @@ const { createLogger } = require('../lib/log');
 const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
 const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/executors/page');
-const { createScratchpad } = require('../lib/scratchpad');
+const { createScratchpad, filenameStemFromHint } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
 
@@ -161,6 +161,25 @@ async function reduceSuite() {
     assert.match(v.listing, /\(focused\)/, 'focused marker present');
     assert.strictEqual(v.url, 'http://example.test/x');
     assert.strictEqual(v.title, 'X');
+  });
+
+  await test('cleans noisy link URLs in the listing', () => {
+    const brief = makeBrief({
+      elements: [{
+        ref: '@e1',
+        role: 'link',
+        name: 'Result',
+        url: `https://example.test/path?q=keep&utm_campaign=nope&gs_lcrp=${'x'.repeat(800)}#frag`,
+        bbox: [100, 200, 300, 40],
+      }],
+      text: [],
+      lookup: { '@e1': 111 },
+    });
+    const listing = reduce(brief, {}).listing;
+    assert.match(listing, /https:\/\/example\.test\/path\?q=keep/);
+    assert.ok(!listing.includes('utm_campaign'), 'tracking param should be dropped');
+    assert.ok(!listing.includes('gs_lcrp'), 'google boilerplate param should be dropped');
+    assert.ok(!listing.includes('#frag'), 'fragment should be dropped');
   });
 
   await test('dedupeText collapses consecutive identical text', () => {
@@ -869,8 +888,33 @@ async function scratchpadSuite() {
       assert.ok(md.includes('### Captured note'));
       assert.ok(md.includes('- File: assets/note-1.txt'));
       assert.ok(md.includes('- Image: assets/screenshot-1.png'));
+      assert.ok(md.includes('![screenshot-1.png](assets/screenshot-1.png)'));
       assert.strictEqual(scratch.textCount, 1);
       assert.strictEqual(scratch.imageCount, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('filenameStemFromHint makes durable language slugs', () => {
+    assert.strictEqual(filenameStemFromHint('Read the chart labels & values!'), 'read-the-chart-labels-and-values');
+    assert.strictEqual(filenameStemFromHint('  Résumé / Q2 – totals  '), 'resume-q2-totals');
+    assert.strictEqual(filenameStemFromHint('---'), null);
+  });
+
+  await test('hinted screenshots include slug and supplied id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const image = scratch.saveImage({
+        base64: Buffer.from('jpg bytes').toString('base64'),
+        hint: 'Read chart labels',
+        id: 7,
+        ext: 'jpg',
+      });
+
+      assert.strictEqual(image.name, 'read-chart-labels-screenshot-7.jpg');
+      assert.ok(scratch.readMarkdown().includes('- Image: assets/read-chart-labels-screenshot-7.jpg'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -899,6 +943,25 @@ async function scratchpadSuite() {
       assert.strictEqual(second.name, 'report-2.pdf');
       assert.strictEqual(fs.readFileSync(first.path, 'utf8'), 'first');
       assert.strictEqual(fs.readFileSync(second.path, 'utf8'), 'second');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('hinted assets keep original extension and supplied id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const file = scratch.saveAsset({
+        filename: 'source report.pdf',
+        base64: Buffer.from('pdf').toString('base64'),
+        hint: 'Quarterly revenue report',
+        id: 12,
+      });
+
+      assert.strictEqual(file.name, 'quarterly-revenue-report-12.pdf');
+      assert.ok(scratch.readMarkdown().includes('- File: assets/quarterly-revenue-report-12.pdf'));
+      assert.ok(scratch.readMarkdown().includes('- Link: [quarterly-revenue-report-12.pdf](assets/quarterly-revenue-report-12.pdf)'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -944,10 +1007,11 @@ async function promptSuite() {
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
-    assert.ok(prompt.includes('type[@e] (text: string, clear: boolean?)'), 'required + optional args should be shown');
-    assert.ok(prompt.includes('wait (ms: number)'), 'wait args should be shown');
-    assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, hint: string?)'), 'optional ref types should be shown');
-    assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
+    assert.ok(prompt.includes('type[@e] (intent: string?, text: string, clear: boolean?)'), 'required + optional args should be shown');
+    assert.ok(prompt.includes('wait (intent: string?, ms: number)'), 'wait args should be shown');
+    assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, intent: string?, hint: string?)'), 'optional ref types should be shown');
+    assert.ok(prompt.includes('done (intent: string?, result: string?)'), 'optional args should be marked');
+    assert.ok(prompt.includes('describing where this'), 'intent rule should be explicit');
   });
 
   await test('context is omitted (no header) when null/empty', () => {
@@ -1032,6 +1096,29 @@ async function loopSuite() {
     assert.strictEqual(session.extractCount, 3);
   });
 
+  await test('sparse post-navigation brief is retried before prompting', async () => {
+    const reqs = installFakeProvider([
+      [action('click', { ref: '@e1' })],
+      [action('done', { args: {} })],
+    ]);
+    const sparse = makeBrief({ url: 'http://example.test/b', title: 'Loading', elements: [], text: [], regions: [], lookup: {} });
+    const loaded = makeBrief({ url: 'http://example.test/b', title: 'Loaded' });
+    const session = makeFakeSession([
+      makeBrief({ url: 'http://example.test/a' }),
+      sparse,
+      loaded,
+    ]);
+    const r = await run({
+      session,
+      task: 'x',
+      config: baseConfig({ loop: { maxSparsePageRetries: 2, sparsePageRetryMs: 0, sparsePageMinNodes: 2 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.match(reqs[1].messages[0].content, /Title: Loaded/);
+    assert.ok(!reqs[1].messages[0].content.includes('(no interactive elements)'), 'loaded listing should be used');
+    assert.strictEqual(session.extractCount, 3);
+  });
+
   await test('max-steps is honored', async () => {
     installFakeProvider([[action('press', { args: { key: 'ArrowDown' } })]]);  // never finishes
     const session = makeFakeSession([makeBrief]);
@@ -1063,6 +1150,44 @@ async function loopSuite() {
     assert.strictEqual(r.status, 'stuck', r.error);
     // click executes twice; the 3rd identical pick (with no page change) aborts.
     assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('intent metadata does not bypass repeated-action guard', async () => {
+    installFakeProvider([
+      [action('click', { ref: '@e1', args: { intent: 'try search' } })],
+      [action('click', { ref: '@e1', args: { intent: 'retry search differently' } })],
+      [action('click', { ref: '@e1', args: { intent: 'still test same click' } })],
+    ]);
+    const session = makeFakeSession([makeBrief]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({ loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 } }),
+    });
+    assert.strictEqual(r.status, 'stuck', r.error);
+    assert.strictEqual(r.steps.length, 2);
+  });
+
+  await test('repeated scroll intent adds a pivot warning to history', async () => {
+    const reqs = installFakeProvider([
+      [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
+      [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
+      [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 0, contentHeight: 3000 } }),
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 600, contentHeight: 3000 } }),
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 1200, contentHeight: 3000 } }),
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: 1800, contentHeight: 3000 } }),
+    ]);
+    const r = await run({
+      session,
+      task: 'x',
+      config: baseConfig({ loop: { maxSameIntentScrolls: 3 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.match(reqs[3].messages[0].content, /WARNING: scroll intent repeated 3x/);
+    assert.match(reqs[3].messages[0].content, /pivot, save findings, go back, or finish/);
   });
 
   await test('screenshot repeated-read guard is crop-ref aware', async () => {
@@ -1157,7 +1282,7 @@ async function loopSuite() {
     });
     assert.strictEqual(r.status, 'completed', r.error);
     // The next turn's prompt must show what got selected.
-    assert.match(reqs[1].messages[0].content, /selected: "Selected Heading"/);
+    assert.match(reqs[1].messages[0].content, /selected: "Welcome"/);
     // changesPage:false ⇒ no polling for a change that never comes: exactly one
     // extract per turn (2), not 2 + the maxNoChangePolls extras.
     assert.strictEqual(session.extractCount, 2);
@@ -1200,6 +1325,20 @@ async function loopSuite() {
     assert.match(msg, /scrolled 400\/2400px/, 'scroll position present');
   });
 
+  await test('turn message cleans tracking/noisy URL params for prompt display', async () => {
+    const reqs = installFakeProvider([[action('done', { args: {} })]]);
+    const brief = makeBrief({
+      url: `https://www.google.com/search?q=funded+ai+startups&utm_source=newsletter&gs_lcrp=${'x'.repeat(800)}&sourceid=chrome#frag`,
+    });
+    const r = await run({ session: makeFakeSession([brief]), task: 'x', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const msg = reqs[0].messages[0].content;
+    assert.match(msg, /q=funded\+ai\+startups/);
+    assert.ok(!msg.includes('utm_source'), 'tracking param should be dropped');
+    assert.ok(!msg.includes('gs_lcrp'), 'google boilerplate param should be dropped');
+    assert.ok(!msg.includes('#frag'), 'fragment should be dropped');
+  });
+
   await test('completed no-save run still writes report.md', async () => {
     installFakeProvider([[action('done', { args: { result: 'ok' } })]]);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
@@ -1213,6 +1352,31 @@ async function loopSuite() {
       assert.strictEqual(r.status, 'completed', r.error);
       assert.ok(fs.existsSync(reportPath), 'report.md exists even with no saves');
       assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Scratchpad\n\n_(nothing saved)_'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('finished run folds saved.md into report.md and removes saved.md', async () => {
+    installFakeProvider([[
+      action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } }),
+      action('done', { args: { result: 'ok' } }),
+    ]]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
+    try {
+      const r = await run({
+        session: makeFakeSession([makeBrief]),
+        task: 'finish with saved content',
+        config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
+      });
+      const runDir = path.join(dir, r.id);
+      const reportPath = path.join(runDir, 'report.md');
+      const savedPath = path.join(runDir, 'saved.md');
+      const report = fs.readFileSync(reportPath, 'utf8');
+
+      assert.strictEqual(r.status, 'completed', r.error);
+      assert.ok(report.includes('Full captured finding'), 'report includes saved.md content');
+      assert.ok(!fs.existsSync(savedPath), 'saved.md is removed after final report is written');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1337,7 +1501,7 @@ async function memorySuite() {
 
   await test('prompt carries the event log + current page, not a transcript', async () => {
     const reqs = installFakeProvider([
-      [action('type', { ref: '@e1', args: { text: 'hello' } })],
+      [action('type', { ref: '@e1', args: { text: 'hello', intent: 'test search input' } })],
       [action('done', { args: {} })],
     ]);
     const session = makeFakeSession([makeBrief, makeBrief]);
@@ -1356,6 +1520,7 @@ async function memorySuite() {
     assert.strictEqual(reqs[1].messages.length, 1);
     assert.ok(!reqs[1].messages.some(m => m.role === 'assistant'), 'no transcript replay');
     assert.match(reqs[1].messages[0].content, /typed "hello" into "Search"/);
+    assert.match(reqs[1].messages[0].content, /intent: test search input/);
   });
 
   await test('turn log includes the simplified LLM payload', async () => {
@@ -1420,6 +1585,19 @@ async function memorySuite() {
     assert.match(t2, /rejected:/);
     assert.match(t2, /typed "x" into "Welcome"/);   // @t1's name is "Welcome"
   });
+
+  await test('a rejected wait without ms renders cleanly', async () => {
+    const reqs = installFakeProvider([
+      [action('wait', { args: {} })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const t2 = reqs[1].messages[0].content;
+    assert.match(t2, /waited — rejected: missing required arg "ms"/);
+    assert.ok(!t2.includes('waited ms'), 'should not render awkward missing-ms wording');
+  });
 }
 
 // Provider wire-format translation lives in _shared.js and feeds all three
@@ -1437,10 +1615,11 @@ async function providerTranslationSuite() {
 
   await test('toolsFromRegistry exposes optional screenshot ref', () => {
     const [tool] = planMod.toolsFromRegistry({ take_screenshot: registry.take_screenshot });
-    assert.deepStrictEqual(tool.inputSchema, { ref: 'string?', hint: 'string?' });
+    assert.deepStrictEqual(tool.inputSchema, { ref: 'string?', intent: 'string?', hint: 'string?' });
     const schema = buildJsonSchema(tool.inputSchema);
     assert.deepStrictEqual(schema.required, []);
     assert.strictEqual(schema.properties.ref.type, 'string');
+    assert.strictEqual(schema.properties.intent.type, 'string');
   });
 
   await test('hoistRef splits ref from the rest of the args', () => {

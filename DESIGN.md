@@ -65,6 +65,20 @@ The output of `extract.js`. Already implemented (`schemaVersion: "2.0"`). One ad
 
 `briefHash` is computed over a canonical serialization: sorted refs and their resolved data, viewport, url, title. Timestamps, `elapsedMs`, and other ephemeral fields are excluded. Two semantically-identical pages produce the same hash.
 
+#### The perception band (below-fold look-ahead)
+
+When the loop extracts with `inViewportOnly`, the include/exclude filter is **not** the viewport — it is the *perception band*: the real viewport **plus one extra viewport-height of look-ahead below the fold** (`isInPerceptionBand` in `lib/extract.js`). `inViewport` stays the honest "actually on screen" flag; the band is only what governs membership in the brief.
+
+The motive is one saved LLM turn. Without look-ahead, a target sitting just past the fold costs a full round-trip: the model can't see it, emits `scroll`, we re-extract and re-prompt, and only then does it act. Pulling one screen of below-fold content into the brief lets the model find that target on the first turn and act immediately.
+
+Three properties keep this an addition, not a regression:
+
+- **The viewport floor is never clipped.** The viewport is a strict subset of the band, so this can only *add* below-fold elements — it can never drop something the user can see. The `maxListingLines` cap in `reduce.js` is the pathological-page seatbelt; because it truncates in reading order it sheds the lowest (spill) lines first, leaving visible content protected.
+- **The spill is one viewport-height, not a fixed element count.** A scroll reveals exactly one viewport-height of new content, so "one scroll of look-ahead" *is* one viewport-height by definition. An element-count cap can't express that — 60 elements is ~100px on a dense feed (saves no scroll) or thousands of px on a sparse page (overshoots). A height self-scales to the user's actual window (`viewport.height`, from the layout metrics).
+- **The spill is downward-only.** The loop enters a page at the top and reads top-to-bottom, so useful look-ahead is what comes next (below), never above. The band extends the bottom edge by `viewport.height` and leaves the top edge at the viewport.
+
+A spilled element is genuinely off-screen (`inViewport:false`), so the hit-test (`DOM.getNodeForLocation`) cannot verify it yet — it shows as `unknown` in the debug overlay, and the executor still scrolls it into view (`clickablePoint` → `scrollIntoViewIfNeeded`) before clicking. The band governs what the model is *offered*, not what is *verified*: perception looks one screen ahead, but clickability is still proven at action time against the real viewport.
+
 **Unreadable regions** (`regions`) are the parts of the page the accessibility tree can't describe: a rendered `<canvas>`, an `<img>` with no `alt`, an `<svg>` with no accessible name, or a **cross-origin `<iframe>`**. Their content (chart, map, scanned text, CAPTCHA, embedded login form) isn't text in our tree, so it never appears in `elements`/`text`. `extract.js` reads them straight from the DOMSnapshot — tag + attributes + layout — and emits a region for each rendered graphic that has **no accessible name** and is **not nested in a link/button** (those are control icons, already represented by the control). This is a deterministic structural fact, not a heuristic about whether content is "missing": we report that a nameless graphic is painted here, and the planner decides whether it matters.
 
 The cross-origin iframe case uses the same report-the-fact principle. A cross-origin iframe is an out-of-process frame (OOPIF): its document runs in a different renderer, so it's absent from our single `captureSnapshot`, and its text/elements never reach the brief. We detect this structurally — DOMSnapshot's `nodes.contentDocumentIndex` points an `<iframe>` at its embedded document **only for same-process frames** (whose content we already extract); an `<iframe>` with no such index is cross-origin (or unloaded) and unreadable from the DOM. We surface it as an `iframe` region so the model can read it via a cropped screenshot — the composited capture already includes cross-origin pixels — without the full multi-target OOPIF stitching that per-element refs inside the frame would require. Only `<iframe>` is handled; legacy `<frame>`/`<frameset>` are out of scope.
@@ -337,7 +351,12 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
 | `loop.maxNoChangePolls` | `10` | Give up waiting after this many polls and let the model act/finish. |
+| `loop.maxStuckRepeats` | `2` | Stop after the same ineffective/errored/idempotent read action repeats this many times. |
 | `loop.maxEmptyPlans` | `3` | Stop after this many consecutive LLM turns with no actions. |
+| `loop.maxSparsePageRetries` | `4` | After URL change, retry sparse snapshots this many times before prompting. |
+| `loop.sparsePageRetryMs` | `400` | Wait between sparse post-navigation re-extracts. |
+| `loop.sparsePageMinNodes` | `2` | Elements + text + regions below this count is considered sparse. |
+| `loop.maxSameIntentScrolls` | `3` | Add a pivot warning after this many consecutive same-intent scrolls on one page. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
@@ -378,6 +397,10 @@ The biggest hidden risk in any browser-agent loop is snapshotting mid-transition
 The heavier "is the page actually done changing?" question is answered by the loop's no-change short-circuit (above), which polls the content hash rather than the wall clock. A future refinement can make `settle()` itself event-driven — return on the first of `Page.lifecycleEvent` (`networkAlmostIdle`/`load`) or an AX-tree-quiet window — but the hash-poll already covers the practical case without per-poll CDP wiring.
 
 The LLM verb `wait` is *not* the settle mechanism — it's for deliberate pauses (animation, debouncing, throttled UI). Settle still runs after every `wait`.
+
+After a URL-changing action, Loop also retries sparse snapshots before prompting (`loop.maxSparsePageRetries`, `loop.sparsePageRetryMs`, `loop.sparsePageMinNodes`). This catches pages that have committed navigation but not yet hydrated enough DOM/accessibility content, avoiding premature screenshot fallbacks on temporarily empty pages.
+
+Loop tracks consecutive scrolls with the same `intent` on the same page. Once `loop.maxSameIntentScrolls` is reached, it adds a warning to prompt history telling the model to pivot, save findings, go back, or finish. This is advisory, not a hard rejection.
 
 ---
 
@@ -427,6 +450,7 @@ Each Plan call is therefore just `{ system, tools, messages: [ <one user message
 - **Linear, not quadratic.** Only the current page is ever shown in full; old snapshots collapse to one event line each. The system prompt + tool defs remain the stable, cacheable prefix.
 - **Provider-agnostic with no pairing.** Because no `tool_use`/`tool_result` blocks are replayed, there is no `tool_use_id` to thread and no role-alternation constraint — every provider gets a single user turn.
 - **Derived, not summarized by a model.** The log comes straight from the Steps the loop already records (`describeAction` resolves a ref to its element name) plus URL deltas, so it costs no extra LLM call and can't hallucinate state.
+- **Intent breadcrumbs.** Each tool schema includes optional `intent` metadata. The system prompt requires it to stay under 15 words, and the loop logs it next to the action so the next turn knows why the agent is on the current page without adding another LLM call.
 
 The known limitation: an event log captures actions, navigations, and errors, but not arbitrary page text that appeared and then vanished. A future `note`/`extract` verb would let the model deliberately persist a fact into the log.
 
