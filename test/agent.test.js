@@ -828,6 +828,7 @@ async function scratchpadSuite() {
       const scratch = createScratchpad({ enabled: false, dir, runId: 'x' });
       assert.strictEqual(scratch.saveText({ content: 'Nope' }), null);
       assert.strictEqual(scratch.saveImage({ base64: Buffer.from('x').toString('base64') }), null);
+      assert.strictEqual(scratch.writeReport('report'), null);
       assert.strictEqual(scratch.readMarkdown(), '');
       assert.deepStrictEqual(fs.readdirSync(dir), []);
     } finally {
@@ -850,6 +851,18 @@ async function scratchpadSuite() {
       assert.ok(md.includes('- Image: assets/screenshot-1.png'));
       assert.strictEqual(scratch.textCount, 1);
       assert.strictEqual(scratch.imageCount, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('scratchpad creates run dir and writes report', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      assert.ok(fs.existsSync(scratch.dir), 'run directory exists at init');
+      assert.strictEqual(scratch.writeReport('# Report'), scratch.reportPath);
+      assert.strictEqual(fs.readFileSync(scratch.reportPath, 'utf8'), '# Report');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1150,6 +1163,24 @@ async function loopSuite() {
     assert.ok(!msg.includes('tracking=abc123'), 'fragment stripped');
     assert.ok(msg.includes('Title: My Feed'), 'title present');
     assert.match(msg, /scrolled 400\/2400px/, 'scroll position present');
+  });
+
+  await test('completed no-save run still writes report.md', async () => {
+    installFakeProvider([[action('done', { args: { result: 'ok' } })]]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
+    try {
+      const r = await run({
+        session: makeFakeSession([makeBrief]),
+        task: 'finish',
+        config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
+      });
+      const reportPath = path.join(dir, r.id, 'report.md');
+      assert.strictEqual(r.status, 'completed', r.error);
+      assert.ok(fs.existsSync(reportPath), 'report.md exists even with no saves');
+      assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Scratchpad\n\n_(nothing saved)_'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   await test('a revisited URL is flagged in the turn message; a first visit is not', async () => {
