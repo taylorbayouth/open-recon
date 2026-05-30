@@ -1577,6 +1577,45 @@ async function geminiSuite() {
   });
 }
 
+// Vision is now unified onto adapter.describe() + registry dispatch (Phase 5).
+// Verify the seam: every provider advertises vision, and vision.describe routes
+// through the adapter and normalizes its text.
+async function visionDispatchSuite() {
+  console.log('\nvision dispatch (unified describe):');
+  const visionMod = require('../lib/vision');
+  const { providers } = require('../lib/plan');
+
+  await test('every built-in provider advertises vision + describe()', () => {
+    // Built-ins only — an earlier suite injects a partial `fake` adapter into the
+    // shared registry, which deliberately has no capabilities block.
+    for (const name of ['openai', 'anthropic', 'ollama', 'gemini']) {
+      const a = providers[name];
+      assert.strictEqual(a.capabilities.vision, true, `${name} should support vision`);
+      assert.strictEqual(typeof a.describe, 'function', `${name} should implement describe()`);
+      assert.ok(a.defaultVisionModel, `${name} should declare a defaultVisionModel`);
+    }
+  });
+
+  await test('vision.describe routes through the configured adapter and normalizes', async () => {
+    // Config resolves vision.provider to openai (see open-recon.config.json), so
+    // stub that adapter's describe() and assert vision.js orchestrates around it.
+    const openai = providers.openai;
+    const origDescribe = openai.describe;
+    let seen;
+    openai.describe = async (req) => { seen = req; return { kind: 'vision', text: '{"summary":"a login page","description":"full detail"}' }; };
+    try {
+      const out = await visionMod.describe({ imageBase64: 'BASE64', mimeType: 'image/jpeg', hint: 'the button' });
+      assert.strictEqual(seen.model, 'gpt-5.4-mini', 'config model forwarded to the adapter');
+      assert.strictEqual(seen.imageBase64, 'BASE64');
+      assert.strictEqual(seen.maxTokens, 1024, 'config maxTokens forwarded');
+      assert.match(seen.prompt, /Focus especially on: the button/, 'hint folded into prompt');
+      assert.deepStrictEqual(out, { summary: 'a login page', description: 'full detail' });
+    } finally {
+      openai.describe = origDescribe;
+    }
+  });
+}
+
 async function cacheSuite() {
   console.log('\nprompt caching (provider breakpoints):');
   const { toAnthropicTools } = require('../lib/providers/anthropic');
@@ -1745,6 +1784,7 @@ async function postJSONSuite() {
   await memorySuite();
   await providerTranslationSuite();
   await geminiSuite();
+  await visionDispatchSuite();
   await cacheSuite();
   await normalizeUrlSuite();
   await postJSONSuite();
