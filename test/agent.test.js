@@ -909,10 +909,12 @@ async function promptSuite() {
     const prompt = buildSystemPrompt({
       click: registry.click,
       type: registry.type,
+      take_screenshot: registry.take_screenshot,
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
     assert.ok(prompt.includes('type[@e] (text: string, clear: boolean?)'), 'required + optional args should be shown');
+    assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, hint: string?)'), 'optional ref types should be shown');
     assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
 
@@ -1398,6 +1400,14 @@ async function providerTranslationSuite() {
     const s = buildJsonSchema({ text: 'string', amount: 'number?' });
     assert.deepStrictEqual(s.required, ['text']);
     assert.strictEqual(s.properties.amount.type, 'number');
+  });
+
+  await test('toolsFromRegistry exposes optional screenshot ref', () => {
+    const [tool] = planMod.toolsFromRegistry({ take_screenshot: registry.take_screenshot });
+    assert.deepStrictEqual(tool.inputSchema, { ref: 'string?', hint: 'string?' });
+    const schema = buildJsonSchema(tool.inputSchema);
+    assert.deepStrictEqual(schema.required, []);
+    assert.strictEqual(schema.properties.ref.type, 'string');
   });
 
   await test('hoistRef splits ref from the rest of the args', () => {
