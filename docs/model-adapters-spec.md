@@ -189,7 +189,7 @@ This means the existing `open-recon.config.json` (flat, `gpt-5.4-mini`) keeps wo
 |---|---|---|---|---|
 | OpenAI | Automatic | 1024 (+128 incr.) | exact prefix match; `prompt_cache_key` hint already sent (`openai.js:142-144`) | ~90% |
 | Anthropic | **Explicit** | 1024 (4096 on Opus 4.6/4.7 & Haiku 4.5) | `cache_control:{type:'ephemeral'}`, ≤4 breakpoints, optional `ttl:'1h'`; already on system + last tool (`anthropic.js:62,99`) | ~90% read (1.25× write) |
-| Gemini | **Implicit (default) + explicit** | implicit ~1024–2048; explicit ≥4096 (Gemini 3.x) | implicit auto; explicit via `cachedContents` resource referenced by `cachedContent` field | ~90% |
+| Gemini | **Implicit (default) + explicit** | implicit: 1024 (3.5/2.5 Flash) · 4096 (Pro); explicit: varies by model | implicit auto; explicit via `cachedContents` resource referenced by `cachedContent` field, TTL default 1h | ~90% |
 | Ollama | KV (local) | n/a | `keep_alive` (`ollama.js:53`) | n/a |
 
 **Recommendation:** Gemini **implicit-first** (no code beyond reusing a stable prompt prefix). Explicit `cachedContents` only if we later pin large static system context. **Live gotcha to design around:** Gemini implicit caching can fail to trigger when `tools` are defined — and the planner always sends tools — so the adapter should (a) order `systemInstruction` + tools as a stable prefix and (b) surface `cachedContentTokenCount` in usage so we can *measure* whether implicit caching is actually hitting rather than assume it.
@@ -236,6 +236,6 @@ Sourced from live docs/searches this session; **flagged** items couldn't be fetc
 
 **OpenAI caching (authoritative — developers.openai.com):** automatic, ≥1024 tokens, 128-token increments, no code required, ~90% discount, 5–10 min idle eviction.
 
-**Gemini caching (⚠️ secondary sources — re-verify exact field names):** implicit on by default for 2.5+; explicit via `cachedContents` resource (`model`, `contents`, `systemInstruction`, `ttl`, `displayName`) referenced by `cachedContent` in `generateContent`; explicit min ~4096 tokens on Gemini 3.x. The doc page (`ai.google.dev/gemini-api/docs/caching`) returned HTTP 403 this session — **treat field names as provisional and confirm against the live REST reference before coding the explicit path.**
+**Gemini caching (authoritative — confirmed against the official caching doc):** implicit on by default for 2.5+ (min input: 1024 tokens for 3.5/2.5 Flash, 4096 for Pro); cached-token count returned in `usage_metadata`. Explicit: `POST /v1beta/cachedContents` with `{ model, contents, systemInstruction, ttl, display_name }`, then reference via the `cachedContent` field in `generateContent`. **TTL defaults to 1 hour** if unset; full lifecycle available — list (`GET cachedContents`), update (`PATCH` `ttl`/`expire_time`), delete (`DELETE`). Cached content is billed by token count × storage duration. Explicit minimum input varies by model (no single 4096/32768 threshold — earlier provisional figures retracted). The earlier HTTP 403 on the doc page is resolved: field names above are verified.
 
 **Gemini wire format (authoritative — ai.google.dev):** `generateContent` with `contents[].parts[]`, `tools[].functionDeclarations[]`, response `functionCall:{name,args}` (args is an object).
