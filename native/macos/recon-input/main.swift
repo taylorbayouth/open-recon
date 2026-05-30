@@ -243,8 +243,12 @@ func postKey(_ keyName: String, modifiers: [String]) -> String? {
     let flags = modifierFlags(modifiers)
     let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
     let up   = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
+    // The chord fires on key-down (with the modifier flag set); the key-up then
+    // clears the flags, so the modifier never stays asserted in the system's
+    // state. Without this, Cmd+A leaves Command "held", and the characters typed
+    // next are misread as Cmd-chords (new tab, URL bar, DevTools).
     down?.flags = flags
-    up?.flags = flags
+    up?.flags = []
     down?.post(tap: .cghidEventTap)
     up?.post(tap: .cghidEventTap)
     return nil
@@ -262,6 +266,13 @@ func typeText(_ text: String, delayMsMin: Int, delayMsMax: Int) {
         let utf16 = Array(s.utf16)
         let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)
         let up   = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+        // Zero the flags so a typed character can never inherit a held modifier.
+        // CGEvents created without explicit flags pick up the current modifier
+        // state, so a preceding chord (e.g. the Cmd+A select-all before a type)
+        // would otherwise make "abc" register as Cmd+A/Cmd+B/Cmd+C — opening tabs,
+        // the URL bar, DevTools. Also guards against a key the user is holding.
+        down?.flags = []
+        up?.flags = []
         utf16.withUnsafeBufferPointer { buf in
             down?.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress)
             up?.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress)
