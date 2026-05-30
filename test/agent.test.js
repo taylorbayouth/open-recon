@@ -303,7 +303,7 @@ async function screenshotSuite() {
   const { screenshot } = require('../lib/screenshot');
   const visionMod = require('../lib/vision');
   const origDescribe = visionMod.describe;
-  visionMod.describe = async () => 'a description';   // no network/LLM in unit tests
+  visionMod.describe = async () => ({ summary: 'short view', description: 'a description' });   // no network/LLM in unit tests
 
   const fakeSession = () => {
     const calls = [];
@@ -360,6 +360,22 @@ async function screenshotSuite() {
   } finally {
     visionMod.describe = origDescribe;
   }
+}
+
+async function visionSuite() {
+  console.log('\nvision:');
+  const { normalizeVisionResult } = require('../lib/vision');
+
+  await test('normalizes typed JSON into summary + description', () => {
+    const out = normalizeVisionResult('{"summary":"short page summary","description":"full page description"}');
+    assert.deepStrictEqual(out, { summary: 'short page summary', description: 'full page description' });
+  });
+
+  await test('falls back to a ten-word summary for non-JSON vision text', () => {
+    const out = normalizeVisionResult('one two three four five six seven eight nine ten eleven twelve');
+    assert.strictEqual(out.summary, 'one two three four five six seven eight nine ten');
+    assert.strictEqual(out.description, 'one two three four five six seven eight nine ten eleven twelve');
+  });
 }
 
 async function osGateSuite() {
@@ -1052,6 +1068,28 @@ async function loopSuite() {
     assert.strictEqual(session.extractCount, 2);
   });
 
+  await test('vision details stay out of the next prompt history', async () => {
+    const visionMod = require('../lib/vision');
+    const origDescribe = visionMod.describe;
+    const full = 'FULL_DETAIL '.repeat(80).trim();
+    visionMod.describe = async () => ({ summary: 'short chart summary', description: full });
+    try {
+      const reqs = installFakeProvider([
+        [action('take_screenshot')],
+        [action('done', { args: {} })],
+      ]);
+      const session = makeFakeSession([makeBrief, makeBrief]);
+      session.client.Page = { captureScreenshot: async () => ({ data: Buffer.from('png').toString('base64') }) };
+      const r = await run({ session, task: 'inspect image', config: baseConfig({ scratchpad: { enabled: false } }) });
+      assert.strictEqual(r.status, 'completed', r.error);
+      const t2 = reqs[1].messages[0].content;
+      assert.ok(t2.includes('short chart summary'), 'summary re-enters prompt history');
+      assert.ok(!t2.includes(full), 'full description stays out of prompt history');
+    } finally {
+      visionMod.describe = origDescribe;
+    }
+  });
+
   await test('turn message carries URL (fragment stripped), title, and scroll position', async () => {
     const reqs = installFakeProvider([[action('done', { args: {} })]]);
     const brief = makeBrief({
@@ -1475,6 +1513,7 @@ async function postJSONSuite() {
 (async () => {
   await reduceSuite();
   await regionSuite();
+  await visionSuite();
   await screenshotSuite();
   await osGateSuite();
   await validateSuite();
