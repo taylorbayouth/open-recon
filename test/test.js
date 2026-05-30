@@ -99,16 +99,21 @@ test('isLeanVisible: opacity:0 (non-focusable) is hidden', () => {
   assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, { opacity: '0' }), false);
 });
 
-test('isLeanVisible: opacity:0 + focusable is kept (transparent input)', () => {
+test('isLeanVisible: opacity:0 + focusable textbox is kept (transparent input)', () => {
   // A real input rendered transparent (its visible styling is a sibling), e.g.
   // LinkedIn's search box — focusable and pointer-reachable, so it stays.
   const style = { opacity: '0', 'pointer-events': 'auto' };
-  assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, style, true), true);
+  assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, style, true, 'textbox'), true);
+});
+
+test('isLeanVisible: opacity:0 + focusable button is hidden', () => {
+  const style = { opacity: '0', 'pointer-events': 'auto' };
+  assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, style, true, 'button'), false);
 });
 
 test('isLeanVisible: opacity:0 + focusable but pointer-events:none is hidden', () => {
   const style = { opacity: '0', 'pointer-events': 'none' };
-  assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, style, true), false);
+  assert.strictEqual(isLeanVisible({ x: 0, y: 0, width: 100, height: 50 }, style, true, 'textbox'), false);
 });
 
 test('isLeanVisible: pointer-events:none', () => {
