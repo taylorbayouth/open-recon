@@ -196,7 +196,7 @@ export interface LaunchOptions {
   port?: number;
   /** Explicit path to Chrome/Chromium executable. */
   executablePath?: string;
-  /** Chrome user data directory. Default: ~/.open-recon/profile */
+  /** Chrome user data directory. Default: ~/.browser-agent/profile */
   userDataDir?: string;
   /** Launch Chrome in headless mode. Default: false */
   headless?: boolean;
@@ -238,7 +238,7 @@ export interface HumanizeOptions {
 }
 
 export interface ExecutorOptions {
-  /** Backend selection. Default: env OPEN_RECON_EXECUTOR or 'os'. */
+  /** Backend selection. Default: env BROWSER_AGENT_EXECUTOR or 'os'. */
   backend?: 'cdp' | 'os';
   /** Override path to the recon-input binary (os backend, macOS only). */
   binPath?: string;

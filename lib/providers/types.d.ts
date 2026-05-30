@@ -1,6 +1,6 @@
 // Advisory type definitions for the provider adapter layer.
 //
-// These types are NOT compiled and NOT required to run open-recon. They exist
+// These types are NOT compiled and NOT required to run browser-agent. They exist
 // so editors and an optional `tsc --checkJs` pass can verify that each provider
 // in lib/providers/*.js conforms to the same contract. Every shape here mirrors
 // a runtime shape that already exists in the code (see _shared.js buildCompletion,

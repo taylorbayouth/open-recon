@@ -1,6 +1,6 @@
-# Open Recon — Engine Design
+# Browser Agent — Engine Design
 
-This document captures the architecture, contracts, and conventions for the broader Open Recon engine: the pipeline that goes from a live Chrome tab through an LLM and back to dispatched browser actions. Open Recon's existing extractor (`lib/extract.js`) is one stage in this pipeline; the rest of the engine is what's being built on top of it.
+This document captures the architecture, contracts, and conventions for the broader Browser Agent engine: the pipeline that goes from a live Chrome tab through an LLM and back to dispatched browser actions. Browser Agent's existing extractor (`lib/extract.js`) is one stage in this pipeline; the rest of the engine is what's being built on top of it.
 
 **Status.** This is a working design doc. Decisions here are settled unless explicitly marked deferred. The doc should be updated as the design evolves — it is the single source of truth for cross-module contracts.
 
@@ -262,7 +262,7 @@ The LLM marks task completion by emitting `{ verb: "done", args: { result: "…"
 | `cdp` | `lib/executors/cdp.js` | `Input.dispatchMouseEvent` / `Input.insertText` via CDP | CI, headless tests, dev iteration |
 | `os`  | `lib/executors/os.js`  | `CGEventPost` via the `recon-input` Swift helper | Production / stealth runs (macOS) |
 
-Backends are selected per Run via the `executor` option on `loop.run()` (or via the `OPEN_RECON_EXECUTOR` env var). The default is `os`; tests and CI can opt into `cdp` for deterministic synthetic input.
+Backends are selected per Run via the `executor` option on `loop.run()` (or via the `BROWSER_AGENT_EXECUTOR` env var). The default is `os`; tests and CI can opt into `cdp` for deterministic synthetic input.
 
 ### Why two backends
 
@@ -334,19 +334,19 @@ Mouse motion is a cubic Bezier from current cursor position to target with a sma
 
 ## Configuration
 
-All tunable knobs live in `open-recon.config.json` at the repo root, loaded by `lib/config.js`. Resolution order, lowest to highest priority:
+All tunable knobs live in `browser-agent.config.json` at the repo root, loaded by `lib/config.js`. Resolution order, lowest to highest priority:
 
 ```
-DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
+DEFAULTS (lib/config.js)  <  browser-agent.config.json  <  env vars  <  CLI flags
 ```
 
 `loadConfig()` returns the merged DEFAULTS+file+env config; `agent.js` layers CLI flags on top via `deepMerge` and passes the final object as `run({ config })`. `deepMerge` skips `undefined`, so a partial override (one CLI flag, a half-populated file) never wipes sibling defaults. Library callers can pass a partial `config` to `run()` — it's merged over DEFAULTS internally.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | `openai` | LLM provider (also `OPEN_RECON_PROVIDER`). |
+| `provider` | `openai` | LLM provider (also `BROWSER_AGENT_PROVIDER`). |
 | `model` | `null` | `null` → provider's own default. |
-| `context` | `null` | Optional trusted background (user info, prefs) appended to the system prompt (also `OPEN_RECON_CONTEXT`, `--context`/`-c`). `null` → no Context section. |
+| `context` | `null` | Optional trusted background (user info, prefs) appended to the system prompt (also `BROWSER_AGENT_CONTEXT`, `--context`/`-c`). `null` → no Context section. |
 | `loop.maxSteps` | `30` | Hard cap on LLM turns. |
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
@@ -359,7 +359,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `loop.maxSameIntentScrolls` | `3` | Add a pivot warning after this many consecutive same-intent scrolls on one page. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
-| `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
+| `executor.backend` | `os` | `os` or `cdp` (also `BROWSER_AGENT_EXECUTOR`). |
 | `executor.pauseOnUserInput` | `true` | OS backend: pause input while the human uses the mouse/keyboard, auto-resume when idle. |
 | `executor.userIdleMs` | `600` | OS backend: how long the human must be idle before input resumes. |
 | `executor.raiseChromeOnStart` | `true` | OS backend: preflight foregrounds the agent's Chrome (PID-targeted) so the frontmost-gate is satisfied without manual clicking. |
@@ -504,7 +504,7 @@ shape-checks each adapter against the contract at load time (a clear error beats
 a deep runtime throw; the `vision: true` capability requires a `describe()`).
 The registry is a mutable object keyed by name — `plan.js` looks adapters up by
 name, and tests inject a fake adapter by direct assignment. Set
-`OPEN_RECON_SKIP_ADAPTER_CHECK=1` to bypass the guard.
+`BROWSER_AGENT_SKIP_ADAPTER_CHECK=1` to bypass the guard.
 
 ### Capability-aware dispatch
 
@@ -525,7 +525,7 @@ headers, not bodies.
 
 ### Selection & defaults
 
-Provider is resolved in this order: the `provider` arg to `plan()` / `run()` → `OPEN_RECON_PROVIDER` env → `DEFAULT_PROVIDER` (`'openai'`). Mirrors the executor selection pattern. The vision provider/model are configured independently under `config.vision` (see `lib/vision.js`, which owns prompt/normalization and dispatches through the registry).
+Provider is resolved in this order: the `provider` arg to `plan()` / `run()` → `BROWSER_AGENT_PROVIDER` env → `DEFAULT_PROVIDER` (`'openai'`). Mirrors the executor selection pattern. The vision provider/model are configured independently under `config.vision` (see `lib/vision.js`, which owns prompt/normalization and dispatches through the registry).
 
 | Provider | Module | Default model | Vision model | Credentials | Caching |
 |---|---|---|---|---|---|
@@ -564,7 +564,7 @@ const system = prompt.buildSystemPrompt(actions, config.context);
 
 The system prompt is built once per Run, kept in `Run.system` (optional, for debugging), and sent as the first message of every Plan call.
 
-**Optional context.** `config.context` (also `OPEN_RECON_CONTEXT` / `--context`) is operator-supplied background — who the user is, preferences — and is *authoritative*, unlike page text. It's appended as a labelled trusted block at the **very end** of the prompt, never spliced into the middle: the template + action list above it are byte-identical across runs and form the cacheable prefix (see *Caching seams*), so a per-run context value would invalidate the cache for everything after it if placed earlier. Keeping it last confines the variation to the tail. When `context` is null/empty the block — header included — is omitted entirely.
+**Optional context.** `config.context` (also `BROWSER_AGENT_CONTEXT` / `--context`) is operator-supplied background — who the user is, preferences — and is *authoritative*, unlike page text. It's appended as a labelled trusted block at the **very end** of the prompt, never spliced into the middle: the template + action list above it are byte-identical across runs and form the cacheable prefix (see *Caching seams*), so a per-run context value would invalidate the cache for everything after it if placed earlier. Keeping it last confines the variation to the tail. When `context` is null/empty the block — header included — is omitted entirely.
 
 ---
 
@@ -632,7 +632,7 @@ These are noted here so they don't get forgotten, but they don't block slice 1.
 - **History truncation policy.** When does Loop summarize or drop old Steps? Defer until a real task overflows.
 - **Tool-result formatting for non-tool-use providers.** Ollama and older OpenAI models don't have native tool use. The provider adapter must serialize tool calls as text. Decide per-provider when those providers land.
 - **Concurrency.** First version dispatches one action per turn. The Action shape supports arrays so batched actions can be added later, but the loop body is serial.
-- **Screenshot in LLMView.** Open Recon's brief is text-only by design. Adding a screenshot would change the contract and the prompt-cache strategy. Defer until there's evidence the LLM needs visual context.
+- **Screenshot in LLMView.** Browser Agent's brief is text-only by design. Adding a screenshot would change the contract and the prompt-cache strategy. Defer until there's evidence the LLM needs visual context.
 - **Goal/task input shape.** Free-form string for slice 1. Structured (sub-goals, constraints) later if needed.
 - **Multi-frame / iframe handling.** Extract currently flattens. Same in execute. Real iframe support is a larger change — defer.
 

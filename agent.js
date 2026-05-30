@@ -63,7 +63,7 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage: node agent.js [options] <task>
 
-All knobs live in open-recon.config.json. CLI flags below override the file.
+All knobs live in browser-agent.config.json. CLI flags below override the file.
 
 Options:
   --task, -t <string>          The task for the agent (or pass as positional)
@@ -76,16 +76,16 @@ Options:
   --help, -h                   Show this help
 
 Config file:
-  open-recon.config.json       All defaults; CLI flags override. Path override:
-                               OPEN_RECON_CONFIG.
+  browser-agent.config.json       All defaults; CLI flags override. Path override:
+                               BROWSER_AGENT_CONFIG.
 
 Environment:
   OPENAI_API_KEY          Required for the openai provider (the default).
   ANTHROPIC_API_KEY       Required for the anthropic provider.
   GEMINI_API_KEY          Required for the gemini provider.
-  OPEN_RECON_PROVIDER     Override config provider (${[...PROVIDERS].join('|')}).
-  OPEN_RECON_EXECUTOR     Override config executor backend ('os'|'cdp').
-  OPEN_RECON_CONTEXT      Trusted background injected into the system prompt.
+  BROWSER_AGENT_PROVIDER     Override config provider (${[...PROVIDERS].join('|')}).
+  BROWSER_AGENT_EXECUTOR     Override config executor backend ('os'|'cdp').
+  BROWSER_AGENT_CONTEXT      Trusted background injected into the system prompt.
   OPENAI_PROMPT_CACHE_RETENTION  Optional OpenAI cache retention ('24h' for
                           extended retention on supported models; unset = default).
   OLLAMA_KEEP_ALIVE       Optional: keep the Ollama model + KV cache loaded

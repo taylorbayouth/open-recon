@@ -1,4 +1,4 @@
-# Open Recon
+# Browser Agent
 
 **Regular Chrome. Agent-grade perception. OS-level stealth.**
 
@@ -10,7 +10,7 @@ Most browser agents still choose one of three bad shapes:
 - **Screenshots every turn**: broadly visible, painfully slow, expensive.
 - **Full DOM dumps**: cheap-ish, noisy, huge, and not what the user actually sees.
 
-Open Recon takes the fourth path.
+Browser Agent takes the fourth path.
 
 It drives the Chrome binary you already have, reads the fully rendered page, and
 rebuilds a compact agent-native map: controls, text, unreadable visual regions,
@@ -43,7 +43,7 @@ Headless hints. WebDriver flags. Synthetic input. Extension residue. Strange
 timing. DOM mutation. Screenshot-heavy loops that are too slow to operate like a
 person.
 
-Open Recon is built around a different threat model: use normal Chrome, avoid
+Browser Agent is built around a different threat model: use normal Chrome, avoid
 page-visible automation, pass the model only the minimum rendered structure it
 needs, and make every expensive action deliberate.
 
@@ -67,7 +67,7 @@ browser-automation fingerprints that make agent traffic easy to classify.
 
 ## What Is Fast
 
-Open Recon is fast because it does less.
+Browser Agent is fast because it does less.
 
 - **Rendered-page extraction**: accessibility + layout channels become a compact
   text view in hundreds of milliseconds.
@@ -80,7 +80,7 @@ Open Recon is fast because it does less.
 - **Targeted vision**: screenshots are an action, not the default perception
   layer; cropped screenshots can target a specific `@e`, `@t`, or `@r` ref.
 
-That is why Open Recon is designed to be one of the most token-efficient browser
+That is why Browser Agent is designed to be one of the most token-efficient browser
 agents you can run.
 
 Run the benchmark harness:
@@ -96,7 +96,7 @@ providers, executor modes, and competing browser approaches.
 
 ## What It Can Do
 
-Open Recon is not just a clicker.
+Browser Agent is not just a clicker.
 
 - navigate, click, type, press, scroll, wait, go back
 - follow popups and new tabs when the browser opens them
@@ -127,8 +127,8 @@ Large findings go to disk; compact summaries stay in memory.
 ## Try It
 
 ```bash
-git clone https://github.com/taylorbayouth/open-recon.git
-cd open-recon
+git clone https://github.com/taylorbayouth/browser-agent.git
+cd browser-agent
 npm install
 ```
 
@@ -143,7 +143,7 @@ and stars today. Return a compact markdown table."
 The first run performs preflight:
 
 - asks for an API key and stores it in `.env`
-- launches regular Chrome with an Open Recon profile
+- launches regular Chrome with an Browser Agent profile
 - offers the signed macOS input helper for the stealth executor
 - points you to Accessibility permission if macOS needs it
 
@@ -156,7 +156,7 @@ node cli.js --lean --in-viewport-only --pretty
 
 ## Platform Story
 
-Open Recon has two execution lanes:
+Browser Agent has two execution lanes:
 
 | Lane | Best for | Runs where | Detection profile |
 |---|---|---|---|
@@ -170,14 +170,14 @@ with `--ozone-platform=wayland` bypasses X11 and falls back to `cdp`.
 
 ## Providers
 
-Open Recon talks to providers through a small planning facade:
+Browser Agent talks to providers through a small planning facade:
 
 - OpenAI
 - Anthropic
 - Gemini
 - Ollama
 
-Defaults live in `open-recon.config.json`. Environment variables override the
+Defaults live in `browser-agent.config.json`. Environment variables override the
 file; CLI flags override both.
 
 Useful flags:
@@ -201,7 +201,7 @@ Connect -> Extract -> Reduce -> Plan -> Validate -> Execute
 
 The interesting part is the middle.
 
-Open Recon reconstructs a compact reasoning surface from the rendered browser:
+Browser Agent reconstructs a compact reasoning surface from the rendered browser:
 accessible controls, readable text, layout boxes, state, scroll position, and
 explicit "unreadable" regions for visual content. The model receives that small
 map plus a minimal event history. It does not receive the full DOM. It does not
@@ -216,12 +216,12 @@ Full contracts live in [`DESIGN.md`](DESIGN.md).
 
 ## Security And Trust
 
-Open Recon drives a browser from an LLM. Treat both the page and the model as
+Browser Agent drives a browser from an LLM. Treat both the page and the model as
 untrusted.
 
 Guardrails today:
 
-- dedicated Chrome profile at `~/.open-recon/profile`
+- dedicated Chrome profile at `~/.browser-agent/profile`
 - page content is prompt data, not trusted instruction
 - navigation and file saving reject privileged URL schemes
 - perception, screenshots, image/file discovery, and resource reads do not rely

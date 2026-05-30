@@ -48,7 +48,7 @@
 | Usage fields | `inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens` | `_shared.js:146-151` |
 | Vision | Inlined `describeOpenAI/Anthropic/Ollama`, no shared transport | `lib/vision.js:132-165` |
 | Config (flat) | `provider, model, reasoningEffort, vision.{provider,model,prompt,maxTokens}` | `lib/config.js:12-84` |
-| Env overrides | only `OPEN_RECON_PROVIDER`, `_EXECUTOR`, `_CONTEXT` | `lib/config.js:122-127` |
+| Env overrides | only `BROWSER_AGENT_PROVIDER`, `_EXECUTOR`, `_CONTEXT` | `lib/config.js:122-127` |
 | Tests | fake provider injected into `planMod.providers`; no real-call fixtures | `test/agent.test.js:96-113` |
 | Keys | env-only, never logged ✓ | `openai.js:36-40`, `anthropic.js:37-42`, `ollama.js:32-35` |
 
@@ -172,11 +172,11 @@ Creds/baseUrl live once under `providers`; each role references a provider by ke
 `config.js` gains `normalizeConfig(raw)` run **before** `deepMerge` against defaults:
 - Old flat `provider`/`model`/`reasoningEffort` → `roles.planner.*`.
 - Old `vision.{provider,model,prompt,maxTokens}` → `roles.vision.*`.
-- `OPEN_RECON_PROVIDER` continues to override `roles.planner.provider` (env path at `config.js:122-127` retargeted; behaviour identical).
+- `BROWSER_AGENT_PROVIDER` continues to override `roles.planner.provider` (env path at `config.js:122-127` retargeted; behaviour identical).
 - If a file already uses `providers`/`roles`, it's passed through untouched.
 - The shim is **bidirectional for reads**: internal callers (`loop.js:275-281`, `vision.js:135-139`) get a resolved view, so call sites change minimally.
 
-This means the existing `open-recon.config.json` (flat, `gpt-5.4-mini`) keeps working with no edit required; migration is opt-in.
+This means the existing `browser-agent.config.json` (flat, `gpt-5.4-mini`) keeps working with no edit required; migration is opt-in.
 
 ---
 
