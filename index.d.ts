@@ -3,6 +3,8 @@ export interface Viewport {
   height: number;
   scrollX: number;
   scrollY: number;
+  contentWidth?: number | null;
+  contentHeight?: number | null;
 }
 
 export interface BBox {
@@ -35,13 +37,17 @@ export interface ComputedStyle {
 
 /**
  * Stable reference assigned at extract time. Format: `@<type><n>` where
- * `<type>` is `e` (interactive element) or `t` (text node). Stable within a
- * single snapshot only — a new extraction reassigns. Regex: `/^@[et]\d+$/`.
+ * `<type>` is `e` (interactive element), `t` (text node), or `r` (unreadable
+ * region). Stable within a single snapshot only — a new extraction reassigns.
+ * Regex: `/^@[etr]\d+$/`.
  */
 export type ElementRef = string;
+export type TextRef = string;
+export type RegionRef = string;
+export type SnapshotRef = ElementRef | TextRef | RegionRef;
 
 /** Maps each `ref` to its CDP `backendNodeId` for the current session. */
-export type RefLookup = Record<ElementRef, number>;
+export type RefLookup = Record<SnapshotRef, number>;
 
 export interface FullElement {
   ref: ElementRef;
@@ -74,11 +80,18 @@ export interface LeanElement {
 }
 
 export interface TextNode {
-  ref: ElementRef;
+  ref: TextRef;
   role: string | null;
   name: string;
   level: number | null;
   bbox: BBox | null;
+  inViewport: boolean;
+}
+
+export interface RegionNode {
+  ref: RegionRef;
+  role: 'canvas' | 'image' | 'svg' | 'iframe' | string;
+  bbox: BBox;
   inViewport: boolean;
 }
 
@@ -89,6 +102,7 @@ export interface FlatStats {
   withBounds: number;
   inViewport: number;
   returned: number;
+  regionsReturned?: number;
   elapsedMs: number;
 }
 
@@ -100,6 +114,7 @@ export interface FlatResult {
   viewport: Viewport;
   elements: FullElement[] | LeanElement[];
   text: TextNode[];
+  regions: RegionNode[];
   lookup: RefLookup;
   stats: FlatStats;
 }
@@ -183,7 +198,7 @@ export interface LaunchOptions {
   port?: number;
   /** Explicit path to Chrome/Chromium executable. */
   executablePath?: string;
-  /** Chrome user data directory. Default: ~/.chrome-agent */
+  /** Chrome user data directory. Default: ~/.open-recon/profile */
   userDataDir?: string;
   /** Launch Chrome in headless mode. Default: false */
   headless?: boolean;
@@ -218,13 +233,23 @@ export interface HumanizeOptions {
   /** Pause after arrival, before mouseDown (ms). Default min/max: 40/160. */
   preClickPauseMsMin?: number;
   preClickPauseMsMax?: number;
+  /** Pause after focus before typing (ms). Default: 80. */
+  postFocusPauseMs?: number;
+  /** Pause after clearing a field before typing replacement text (ms). Default: 50. */
+  postClearPauseMs?: number;
 }
 
 export interface ExecutorOptions {
-  /** Backend selection. Default: env OPEN_RECON_EXECUTOR or 'cdp'. */
+  /** Backend selection. Default: env OPEN_RECON_EXECUTOR or 'os'. */
   backend?: 'cdp' | 'os';
   /** Override path to the recon-input binary (os backend, macOS only). */
   binPath?: string;
+  /** Pause OS input while the human uses mouse/keyboard. Default: true. */
+  pauseOnUserInput?: boolean;
+  /** Resume OS input only after the human is idle this long. Default: 600. */
+  userIdleMs?: number;
+  /** Foreground the agent Chrome at run start for the OS backend. Default: true. */
+  raiseChromeOnStart?: boolean;
   /** Humanlike motion / timing knobs. Only meaningful for the `os` backend. */
   humanize?: HumanizeOptions;
 }
