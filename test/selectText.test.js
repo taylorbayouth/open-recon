@@ -9,7 +9,7 @@
 // Uses the cdp backend so it needs no Accessibility permission and runs in CI.
 // Skips cleanly if Chrome isn't on port 9222.
 //
-//   npm run launch && OPEN_RECON_E2E=1 node test/selectText.test.js
+//   npm run launch && BROWSER_AGENT_E2E=1 node test/selectText.test.js
 //   (or: npm run test:e2e — runs all browser tests)
 //
 // Covers: single-line @t, multi-line @t (the wrap case), a node below the fold
@@ -77,13 +77,13 @@ function findText(brief, name) {
 (async () => {
   // Opt-in: this test opens a tab and drives a real Chrome. Gate it behind the
   // same flag as the other e2e tests so it never runs by accident.
-  if (!process.env.OPEN_RECON_E2E) {
-    console.log('\nselectText tests: skipped (set OPEN_RECON_E2E=1 to run them).\n');
+  if (!process.env.BROWSER_AGENT_E2E) {
+    console.log('\nselectText tests: skipped (set BROWSER_AGENT_E2E=1 to run them).\n');
     return;
   }
   if (!(await isRunning(9222))) {
     console.log('\nselectText tests: skipped (Chrome not running on port 9222)');
-    console.log('  Run `npm run launch`, then `OPEN_RECON_E2E=1 node test/selectText.test.js`.\n');
+    console.log('  Run `npm run launch`, then `BROWSER_AGENT_E2E=1 node test/selectText.test.js`.\n');
     return;
   }
 

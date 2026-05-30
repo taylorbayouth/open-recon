@@ -823,31 +823,31 @@ async function configSuite() {
   });
 
   await test('env overrides do not mutate DEFAULTS across reloads', () => {
-    const oldProvider = process.env.OPEN_RECON_PROVIDER;
-    const oldExecutor = process.env.OPEN_RECON_EXECUTOR;
+    const oldProvider = process.env.BROWSER_AGENT_PROVIDER;
+    const oldExecutor = process.env.BROWSER_AGENT_EXECUTOR;
     try {
-      process.env.OPEN_RECON_PROVIDER = 'anthropic';
-      process.env.OPEN_RECON_EXECUTOR = 'cdp';
-      const overridden = loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+      process.env.BROWSER_AGENT_PROVIDER = 'anthropic';
+      process.env.BROWSER_AGENT_EXECUTOR = 'cdp';
+      const overridden = loadConfig({ path: path.join(os.tmpdir(), 'missing-browser-agent-config.json'), reload: true });
       assert.strictEqual(overridden.provider, 'anthropic');
       assert.strictEqual(overridden.executor.backend, 'cdp');
 
-      delete process.env.OPEN_RECON_PROVIDER;
-      delete process.env.OPEN_RECON_EXECUTOR;
-      const fresh = loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+      delete process.env.BROWSER_AGENT_PROVIDER;
+      delete process.env.BROWSER_AGENT_EXECUTOR;
+      const fresh = loadConfig({ path: path.join(os.tmpdir(), 'missing-browser-agent-config.json'), reload: true });
       assert.strictEqual(fresh.provider, DEFAULTS.provider);
       assert.strictEqual(fresh.executor.backend, DEFAULTS.executor.backend);
     } finally {
-      if (oldProvider === undefined) delete process.env.OPEN_RECON_PROVIDER;
-      else process.env.OPEN_RECON_PROVIDER = oldProvider;
-      if (oldExecutor === undefined) delete process.env.OPEN_RECON_EXECUTOR;
-      else process.env.OPEN_RECON_EXECUTOR = oldExecutor;
-      loadConfig({ path: path.join(os.tmpdir(), 'missing-open-recon-config.json'), reload: true });
+      if (oldProvider === undefined) delete process.env.BROWSER_AGENT_PROVIDER;
+      else process.env.BROWSER_AGENT_PROVIDER = oldProvider;
+      if (oldExecutor === undefined) delete process.env.BROWSER_AGENT_EXECUTOR;
+      else process.env.BROWSER_AGENT_EXECUTOR = oldExecutor;
+      loadConfig({ path: path.join(os.tmpdir(), 'missing-browser-agent-config.json'), reload: true });
     }
   });
 
   await test('invalid config JSON fails explicitly', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-config-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-config-'));
     const file = path.join(dir, 'bad.json');
     try {
       fs.writeFileSync(file, '{ bad json');
@@ -862,7 +862,7 @@ async function scratchpadSuite() {
   console.log('\nscratchpad:');
 
   await test('disabled scratchpad performs no filesystem writes', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ enabled: false, dir, runId: 'x' });
       assert.strictEqual(scratch.saveText({ content: 'Nope' }), null);
@@ -876,7 +876,7 @@ async function scratchpadSuite() {
   });
 
   await test('saveText and saveImage persist assets and markdown references', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       const text = scratch.saveText({ content: 'Full captured text', summary: 'Captured note', url: 'https://example.test/a' });
@@ -903,7 +903,7 @@ async function scratchpadSuite() {
   });
 
   await test('hinted screenshots include slug and supplied id', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       const image = scratch.saveImage({
@@ -921,7 +921,7 @@ async function scratchpadSuite() {
   });
 
   await test('scratchpad creates run dir and writes report', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       assert.ok(fs.existsSync(scratch.dir), 'run directory exists at init');
@@ -933,7 +933,7 @@ async function scratchpadSuite() {
   });
 
   await test('saveAsset suffixes colliding sanitized filenames', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       const first = scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('first').toString('base64'), summary: 'first' });
@@ -949,7 +949,7 @@ async function scratchpadSuite() {
   });
 
   await test('hinted assets keep original extension and supplied id', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-scratch-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       const file = scratch.saveAsset({
@@ -982,7 +982,7 @@ async function logSuite() {
   console.log('\nlog:');
 
   await test('disabled logger is a no-op and creates no files', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-log-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-log-'));
     const logDir = path.join(dir, 'logs');
     try {
       const logger = createLogger({ enabled: false, dir: logDir });
@@ -1341,7 +1341,7 @@ async function loopSuite() {
 
   await test('completed no-save run still writes report.md', async () => {
     installFakeProvider([[action('done', { args: { result: 'ok' } })]]);
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
     try {
       const r = await run({
         session: makeFakeSession([makeBrief]),
@@ -1362,7 +1362,7 @@ async function loopSuite() {
       action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } }),
       action('done', { args: { result: 'ok' } }),
     ]]);
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-run-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
     try {
       const r = await run({
         session: makeFakeSession([makeBrief]),
@@ -1525,7 +1525,7 @@ async function memorySuite() {
 
   await test('turn log includes the simplified LLM payload', async () => {
     installFakeProvider([[action('done', { args: {} })]]);
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-recon-log-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-log-'));
     const session = makeFakeSession([makeBrief]);
     const r = await run({
       session,
@@ -1776,7 +1776,7 @@ async function visionDispatchSuite() {
   });
 
   await test('vision.describe routes through the configured adapter and normalizes', async () => {
-    // Config resolves vision.provider to openai (see open-recon.config.json), so
+    // Config resolves vision.provider to openai (see browser-agent.config.json), so
     // stub that adapter's describe() and assert vision.js orchestrates around it.
     const openai = providers.openai;
     const origDescribe = openai.describe;

@@ -117,7 +117,7 @@ async function main() {
   }
 
   const providerLabel = `${config.provider}${config.model ? '/' + config.model : ''}`;
-  console.error(`open-recon bench — ${tasks.length} task(s) · ${providerLabel} · executor: ${config.executor.backend}\n`);
+  console.error(`browser-agent bench — ${tasks.length} task(s) · ${providerLabel} · executor: ${config.executor.backend}\n`);
 
   let session;
   try {

@@ -29,7 +29,7 @@ async function main() {
       await launch(opts);
       console.log(`Chrome ready on port ${opts.port || 9222}.`);
     }
-    console.log('Navigate to any page, then run: open-recon-extract --tree');
+    console.log('Navigate to any page, then run: browser-agent-extract --tree');
     return;
   }
 
