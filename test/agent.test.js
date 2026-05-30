@@ -885,6 +885,16 @@ async function scratchpadSuite() {
   });
 }
 
+async function saveFileSuite() {
+  console.log('\nsave_file:');
+  const { saveFile } = require('../lib/savefile');
+
+  await test('non-base64 data URIs are percent-decoded before saving', async () => {
+    const out = await saveFile({ session: { client: {} }, brief: {}, url: 'data:text/plain,hello%20world%21' });
+    assert.strictEqual(Buffer.from(out.fileBytes, 'base64').toString('utf8'), 'hello world!');
+  });
+}
+
 async function logSuite() {
   console.log('\nlog:');
 
@@ -1614,6 +1624,7 @@ async function postJSONSuite() {
   await targetingSuite();
   await configSuite();
   await scratchpadSuite();
+  await saveFileSuite();
   await logSuite();
   await promptSuite();
   await tokenSuite();
