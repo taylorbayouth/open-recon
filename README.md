@@ -1,93 +1,130 @@
 # Open Recon
 
-**The browser agent that reads instead of looks. Fast, invisible, cheap.**
+**Regular Chrome. Agent-grade perception. Mac-level stealth.**
 
-Most browser agents take a screenshot every single turn and ship it to a vision model. That's slow, it's expensive, and the page can see the automation coming. Open Recon does the opposite: it reads Chrome's own **accessibility tree** — the same structured data a screen reader sees — and drives the page through real OS-level input.
+Agents are learning to browse the web. The web has already learned to spot them.
 
-A full-page snapshot takes **~400ms** and a few thousand tokens. The page can't tell it's a bot. And when a task genuinely needs eyes — an image CAPTCHA, a chart — it takes *one* screenshot on demand instead of paying that tax every turn.
+Most browser agents still choose one of three bad shapes:
 
-The result is one of the fastest, cheapest, and smartest browser agents you can run. *(Benchmarks coming soon.)*
+- **Playwright / Puppeteer**: fast, capable, and loudly fingerprinted.
+- **Screenshots every turn**: broadly visible, painfully slow, expensive.
+- **Full DOM dumps**: cheap-ish, noisy, huge, and not what the user actually sees.
 
-- ⚡ **Insanely fast** — ~400ms snapshots, no screenshot round-trips, and the per-turn prompt prefix is cached across the whole run.
-- 👻 **Invisible** — no injected JS, no `navigator.webdriver`, no patched binary. Perception rides Chrome's internal DevTools APIs; clicks go through kernel-level `CGEvent` with humanized motion.
-- 💸 **Token-light** — a complex page fits in 2,000–5,000 tokens of clean, deduplicated text. Vision is the exception, not the default.
-- 📁 **It keeps a project folder** — every run gets a `runs/<id>/` workspace: notes, screenshots, downloaded files, and a Markdown report you can hand to a human or another model.
-- 📎 **It downloads what it finds** — a PDF, an image, the real original bytes — straight to disk.
-- 🧠 **It knows when to stop** — short-circuits redundant LLM calls, waits out lazy loads, and bails cleanly if it's flailing.
-- 🖥️ **Your Chrome, no new browser** — attaches over the remote debugging port. No Playwright, no Puppeteer, no profile to babysit.
+Open Recon takes the fourth path.
 
----
+It drives the Chrome binary you already have, reads the fully rendered page, and
+rebuilds a compact agent-native map: controls, text, unreadable visual regions,
+state, coordinates, and scroll context. Not the raw DOM. Not a screenshot loop.
+A small "toy DOM" made for reasoning and action.
 
-## Feel it
-
-Ask for a live browser task in plain English:
-
-```bash
-node agent.js --verbose "Go to github.com/trending/javascript?since=daily. \
-  Collect the first 5 repositories with owner/name, description, total stars, \
-  and stars today. Don't open repo pages. Return a compact markdown table."
-```
-
-Open Recon attaches to Chrome, reads the tab through its accessibility/layout channels, and hands the model a compact text view — interactive elements marked `@e`, text marked `@t`, each with its on-screen position:
+The model gets the page like this:
 
 ```text
-[step 2] snapshot → 63 elements, 118 text nodes, 341ms
-
 [@t7]   heading     "Trending JavaScript repositories"       (322,151)
 [@e14]  link        "facebook / react"                       (214,241)
 [@t18]  StaticText  "The library for web and native user interfaces."
 [@t23]  StaticText  "230,000"
 [@t24]  StaticText  "174 stars today"
-[@e27]  link        "vercel / next.js"                       (207,385)
+[@r2]   image       640x320 - unreadable; take_screenshot @r2 to read
 ```
 
-Then it acts on those refs and returns the answer:
+Then it acts on refs. Click `@e14`. Read `@r2`. Save the PDF. Finish with a
+Markdown report.
+
+No Playwright. No Puppeteer. No cloned browser runtime. No screenshot tax unless
+pixels actually matter.
+
+## Why It Matters
+
+Modern sites do not need to "solve AI" to block browser agents. They just need
+to notice the harness.
+
+Headless hints. WebDriver flags. Synthetic input. Extension residue. Strange
+timing. DOM mutation. Screenshot-heavy loops that are too slow to operate like a
+person.
+
+Open Recon is built around a different threat model: use normal Chrome, avoid
+page-visible automation, pass the model only the minimum rendered structure it
+needs, and make every expensive action deliberate.
+
+On macOS, the default `os` executor sends input through `CGEventPost`, the same
+OS event path used by real mouse and keyboard input. It humanizes movement and
+typing, refuses to type into the wrong foreground app, and pauses while you use
+the machine.
+
+From the site's side, the important parts look boring:
+
+- real Chrome
+- trusted click and key events
+- no `navigator.webdriver`
+- no Playwright or Puppeteer runtime
+- no DOM dump sent to the model
+- no per-turn screenshot loop
+
+No anti-detection claim is absolute. But the macOS path removes the common
+browser-automation fingerprints that make agent traffic easy to classify.
+
+## What Is Fast
+
+Open Recon is fast because it does less.
+
+- **Rendered-page extraction**: accessibility + layout channels become a compact
+  text view in hundreds of milliseconds.
+- **Tiny prompts**: the model sees refs, labels, state, and positions, not a full
+  DOM or image every turn.
+- **Prompt-cache friendly**: stable system/tool prefixes; verbose output shows
+  cache percentage as the run warms.
+- **No-change polling**: if the page has not changed, it waits and rechecks
+  instead of burning another LLM call.
+- **Targeted vision**: screenshots are an action, not the default perception
+  layer; cropped screenshots can target a specific `@e`, `@t`, or `@r` ref.
+
+That is why Open Recon is designed to be one of the most token-efficient browser
+agents you can run.
+
+Run the benchmark harness:
+
+```bash
+npm run launch
+npm run bench
+```
+
+It runs a fixed task suite and prints a Markdown-friendly table with `Steps`,
+`Time`, `In`, `Out`, `Cache%`, and `Pass`. Use that table to compare models,
+providers, executor modes, and competing browser approaches.
+
+## What It Can Do
+
+Open Recon is not just a clicker.
+
+- navigate, click, type, press, scroll, go back
+- follow popups and new tabs when the browser opens them
+- hit-test clicks and avoid obvious covered targets
+- read text without selecting the whole page
+- detect canvas/image/svg/cross-origin iframe regions the text tree cannot read
+- screenshot the viewport or crop exactly to a ref
+- list images and downloadable files without page JS
+- save real bytes from loaded resources when possible
+- save notes, images, screenshots, PDFs, docs, and archives to disk
+- return a complete Markdown report
+
+Every run gets a workspace:
 
 ```text
-| Repository     | Description                                      |   Stars | Today |
-|----------------|--------------------------------------------------|--------:|------:|
-| facebook/react | The library for web and native user interfaces.  | 230,000 |   174 |
-| vercel/next.js | The React Framework                              | 128,000 |    96 |
-```
-
-No script ran in the page. No DOM dump went to the model. It saw the on-screen controls and text, and drove Chrome like a person would.
-
----
-
-## How it pulls this off
-
-**It reads, it doesn't screenshot.** Perception uses Chrome's internal DevTools APIs — `Accessibility.getFullAXTree` and `DOMSnapshot.captureSnapshot` — not page-visible JavaScript. The model gets a typed, reading-order listing with exact `(x,y)` coordinates, so it never has to *visually* parse where a button is. That's where the ~400ms snapshots and the small token bills come from.
-
-**It acts like a human.** On macOS, input goes through `CGEventPost` — the same kernel API as a real mouse and keyboard — moving along a randomized Bezier path with per-click jitter and per-keystroke timing. There's no `navigator.webdriver`, no injected script, no automation flag. The page sees a user.
-
-**It sees on purpose, not by reflex.** When pixels actually matter, `take_screenshot` grabs one frame and routes it to a configurable vision model for a description that flows back into the agent's memory. One deliberate action — not a per-turn cost.
-
----
-
-## It does more than click
-
-Reading a page is the floor. The agent has a small set of capture verbs, and everything it gathers lands in the run's project folder:
-
-- **`save_text`** — banks findings as it goes; the full text hits disk while only a short summary stays in context, so a long task stays cheap and on-track.
-- **`get_images` / `get_files` → `save_file`** — discovers images and downloadable files (PDFs, docs, archives) via pure DOM reads, then pulls the **real bytes** from Chrome's resource cache (so cross-origin and authenticated files work) to disk.
-- **`take_screenshot`** — viewport capture + vision description, on demand.
-
-```
-runs/<id>/
-  saved.md          ← rollup: every note, image, and file with its summary
+runs/<run-id>/
+  report.md
+  saved.md
   assets/
-    screenshot-1.png
-    report-q3.pdf
-    cat.jpg
+    note-1.txt
+    screenshot-1.jpg
+    product-sheet.pdf
+    hero-image.png
 ```
 
-When the run finishes, `agent.js` returns a structured Markdown report — the task, the result, a numbered step log, and the full scratchpad — ready to feed straight into a downstream model or read yourself.
+The model can keep working without stuffing all of that back into context.
+Large findings go to disk; compact summaries stay in memory.
 
-And it's built to run unattended: it skips LLM calls while the page is byte-identical (sitting through navigations, lazy loads, and pagination without spending turns), aborts if the model repeats a dead action, and — on the `os` executor — pauses the instant you grab the mouse, resuming once you're idle.
-
----
-
-## Install
+## Try It
 
 ```bash
 git clone https://github.com/taylorbayouth/open-recon.git
@@ -95,98 +132,114 @@ cd open-recon
 npm install
 ```
 
-The first `node agent.js` runs a preflight that walks you through the rest: it prompts for your **API key** and saves it to `.env`, offers to download the notarized **macOS input driver**, and points you to the **Accessibility permission** if it's not set. Re-running is safe — each step is a no-op once satisfied.
-
-<details>
-<summary>Manual setup (optional)</summary>
-
-**API key** — `cp .env.example .env`, then add `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. (If you previously `export`ed a key in your shell, that wins over `.env` — `unset` it if the agent uses a stale key.)
-
-**macOS input driver** — the Swift helper that posts real OS input. Download `recon-input-*-macos-universal.zip` from the [latest release](https://github.com/taylorbayouth/open-recon/releases/latest) (signed, notarized, stapled — Gatekeeper accepts it offline), or build from source with `bash native/macos/recon-input/build.sh` (Xcode CLI tools required; the unsigned build may need `xattr -d com.apple.quarantine native/macos/recon-input/bin/recon-input`).
-
-**Accessibility permission** — System Settings → Privacy & Security → Accessibility → enable Terminal (or whatever runs Node). Required once for the `os` executor.
-
-</details>
-
----
-
-## Quickstart
+Run a task:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-node agent.js "go to github.com/trending and collect the top 5 repos"
+node agent.js --verbose "Go to github.com/trending/javascript?since=daily. \
+Collect the first 5 repositories with owner/name, description, total stars, \
+and stars today. Return a compact markdown table."
 ```
 
-Just want a snapshot, no agent loop?
+The first run performs preflight:
+
+- asks for an API key and stores it in `.env`
+- launches regular Chrome with an Open Recon profile
+- offers the signed macOS input helper for the stealth executor
+- points you to Accessibility permission if macOS needs it
+
+Want only the extractor?
 
 ```bash
 npm run launch
-node cli.js --lean --in-viewport-only --pretty   # → Done. 23 elements in 373ms
+node cli.js --lean --in-viewport-only --pretty
 ```
 
----
+## Platform Story
 
-## Knobs
+Open Recon has two execution lanes:
 
-All defaults live in `open-recon.config.json`; env vars override the file, and CLI flags override those.
+| Lane | Best for | Runs where | Detection profile |
+|---|---|---|---|
+| `os` | real sites, logged-in browsing, stealth runs | macOS | lowest: trusted OS input, humanized timing |
+| `cdp` | CI, tests, local iteration, non-macOS hosts | Chrome/Chromium via DevTools | higher: synthetic input |
 
-**Providers** — `--provider` or `OPEN_RECON_PROVIDER`:
+The core extractor and agent loop are plain Node + Chrome DevTools Protocol.
+The low-detection input backend is macOS today.
 
-| Provider | Default model | Key |
-|---|---|---|
-| `openai` (default) | `gpt-5.4-mini` | `OPENAI_API_KEY` |
-| `anthropic` | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
-| `ollama` | `llama3.1` | none (local) |
+## Providers
 
-**Execution backend** — `--executor` or `OPEN_RECON_EXECUTOR`:
+Open Recon talks to providers through a small planning facade:
 
-| Backend | Use when | Detection profile |
-|---|---|---|
-| `os` (default) | Real sites, anything that must stay invisible | Low — humanized kernel input |
-| `cdp` | CI, headless tests, local iteration | Higher — synthetic events |
+- OpenAI
+- Anthropic
+- Ollama
 
-**Other useful settings** — `context` (trusted background about the user, injected into the prompt), `loop.maxSteps`, `loop.shortCircuitOnNoChange`, the `humanize` motion/timing block, and a `vision` block that picks the secondary model for screenshots (independent of the planner, so you can pair a cheap planner with a sharp vision model). See `open-recon.config.json` and [`DESIGN.md`](DESIGN.md).
+Defaults live in `open-recon.config.json`. Environment variables override the
+file; CLI flags override both.
 
----
+Useful flags:
 
-## Under the hood
-
+```bash
+node agent.js --provider openai --model gpt-5.4-mini "..."
+node agent.js --provider anthropic "..."
+node agent.js --provider ollama --model llama3.1 "..."
+node agent.js --executor cdp "..."
+node agent.js --context "Trusted operator context here" "..."
 ```
-Connect → Extract → Reduce → Plan → Validate → Execute
-  (CDP)   (recon)  (prompt)  (LLM)   (refs)   (cdp|os)
-             ↑                                     │
-             └──── settle() + re-snapshot ─────────┘
+
+## How It Works
+
+```text
+Connect -> Extract -> Reduce -> Plan -> Validate -> Execute
+   ^                                                     |
+   +---------------- settle + re-snapshot ---------------+
 ```
 
-Each stage hands the next a clean artifact — `Brief`, `LLMView`, `Completion`, `Action`, `Observation` — so the whole pipeline is easy to log, replay, and debug. Full contracts in [`DESIGN.md`](DESIGN.md).
+The interesting part is the middle.
 
-**Requirements:** Node ≥ 18 and Chrome. macOS for the `os` executor; `cdp` and extraction also run on Linux.
+Open Recon reconstructs a compact reasoning surface from the rendered browser:
+accessible controls, readable text, layout boxes, state, scroll position, and
+explicit "unreadable" regions for visual content. The model receives that small
+map plus a minimal event history. It does not receive the full DOM. It does not
+receive a screenshot unless it asks for one.
 
----
+Actions are validated against the current snapshot before execution. Refs expire
+after navigation. Files and screenshots are persisted before their summaries go
+back into the loop. Repeated dead actions trip a stuck guard instead of running
+forever.
 
-## Security & trust model
+Full contracts live in [`DESIGN.md`](DESIGN.md).
 
-Open Recon drives a real browser from an LLM, so it sits between two untrusted inputs — the model's output and the page's content. What's guarded today:
+## Security And Trust
 
-- **Isolated profile.** It runs against a dedicated Chrome profile (`~/.open-recon/profile`), never your everyday browser. But sessions you sign into there persist across runs and the agent can use them — only log into what a task needs.
-- **Page text is data, not instructions.** The prompt makes only the `Task:` line authoritative and treats page content as untrusted. A mitigation, not a guarantee — prompt injection is unsolved; don't run high-stakes tasks unattended on hostile pages.
-- **Navigation is `http`/`https` only.** `file://`, `chrome://`, `about:`, and friends are rejected, so an injected URL can't reach local files or privileged pages.
-- **No page JavaScript is evaluated** for perception or capture — DevTools APIs only. (The lone exception is `selectText` reading `window.getSelection()` to confirm what it highlighted.)
-- **Secrets and artifacts stay local.** Keys live in git-ignored `.env`; `runs/` and `logs/` are git-ignored too, but may contain sensitive page content.
-- **The `os` executor gates on Chrome being frontmost** and backs off while you're using the machine, so input never lands in the wrong window.
+Open Recon drives a browser from an LLM. Treat both the page and the model as
+untrusted.
 
----
+Guardrails today:
+
+- dedicated Chrome profile at `~/.open-recon/profile`
+- page content is prompt data, not trusted instruction
+- navigation and file saving reject privileged URL schemes
+- perception, screenshots, image/file discovery, and resource reads do not rely
+  on page JavaScript
+- optional `collapseNewTabs` uses one small page patch to keep
+  `target="_blank"` links in the current tab; disable it in config for stricter
+  no-patch runs
+- OS executor only sends input when Chrome is frontmost
+- OS executor pauses while the human is actively using the machine
+- `runs/` and `logs/` are local and git-ignored
+
+Prompt injection is not solved. Do not hand an autonomous browser high-stakes
+accounts and walk away.
 
 ## Contributing
 
-PRs and issues welcome — good starting points:
+Good places to push:
 
-- More providers through the existing `plan()` facade.
-- A Linux stealth executor (`XTestFakeMotionEvent` / `uinput`).
-- Better humanize defaults tuned against real detector traces (reproducible measurements especially welcome).
+- Linux/Windows OS-level input backends
+- stronger evals in `bench.js`
+- more providers behind the existing planning facade
+- better detector-facing measurements for humanized input
+- deeper artifact extraction without growing prompt size
 
-See [`DESIGN.md`](DESIGN.md) for the full architecture.
-
-## License
-
-MIT
+MIT.

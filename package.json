@@ -15,7 +15,8 @@
     "agent": "node agent.js",
     "test": "node test/agent.test.js && node test/test.js",
     "test:e2e": "OPEN_RECON_E2E=1 node test/test.js && OPEN_RECON_E2E=1 node test/selectText.test.js",
-    "test:agent": "node test/agent.test.js"
+    "test:agent": "node test/agent.test.js",
+    "bench": "node bench.js"
   },
   "keywords": [
     "cdp",
