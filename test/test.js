@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const CDP = require('chrome-remote-interface');
 
-const { flattenProperties, isInViewport, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
+const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect, chooseTab } = require('../lib/connect');
 
@@ -84,6 +84,41 @@ test('isInViewport: element partially visible', () => {
 
 test('isInViewport: null bbox returns false', () => {
   assert.strictEqual(isInViewport(null, { width: 1200, height: 800, scrollX: 0, scrollY: 0 }), false);
+});
+
+// ── Perception band: viewport + one viewport-height of downward look-ahead ──
+
+test('isInPerceptionBand: on-screen element is in band (floor never clips)', () => {
+  const vp = { width: 1200, height: 800, scrollX: 0, scrollY: 0 };
+  // Anything isInViewport must also be in the band — the viewport is a subset.
+  const bbox = { x: 100, y: 100, width: 200, height: 50 };
+  assert.strictEqual(isInViewport(bbox, vp), true);
+  assert.strictEqual(isInPerceptionBand(bbox, vp), true);
+});
+
+test('isInPerceptionBand: element one screen below fold is in band but NOT in viewport', () => {
+  const vp = { width: 1200, height: 800, scrollX: 0, scrollY: 0 };
+  // y=1200 is past the fold (800) but within the +1 viewport spill (<1600).
+  const bbox = { x: 100, y: 1200, width: 200, height: 50 };
+  assert.strictEqual(isInViewport(bbox, vp), false, 'genuinely off-screen');
+  assert.strictEqual(isInPerceptionBand(bbox, vp), true, 'reachable as look-ahead');
+});
+
+test('isInPerceptionBand: element beyond one screen below fold is excluded', () => {
+  const vp = { width: 1200, height: 800, scrollX: 0, scrollY: 0 };
+  // y=1700 is past the spill ceiling (1600) — more than one scroll away.
+  assert.strictEqual(isInPerceptionBand({ x: 100, y: 1700, width: 200, height: 50 }, vp), false);
+});
+
+test('isInPerceptionBand: spill is downward-only (above-fold-by-a-screen excluded)', () => {
+  const vp = { width: 1200, height: 800, scrollX: 0, scrollY: 1000 };
+  // element at document y=100..150; viewport shows 1000..1800. It is one screen
+  // ABOVE the fold — no upward look-ahead, so it stays excluded.
+  assert.strictEqual(isInPerceptionBand({ x: 100, y: 100, width: 200, height: 50 }, vp), false);
+});
+
+test('isInPerceptionBand: null bbox returns false', () => {
+  assert.strictEqual(isInPerceptionBand(null, { width: 1200, height: 800, scrollX: 0, scrollY: 0 }), false);
 });
 
 test('isLeanVisible: normal element is visible', () => {
