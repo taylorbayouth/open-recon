@@ -447,16 +447,17 @@ async function osGateSuite() {
 async function validateSuite() {
   console.log('\nvalidate:');
 
-  await test('accepts well-formed click/type/scroll/press/done', () => {
+  await test('accepts well-formed click/type/scroll/press/wait/done', () => {
     const { ok, errors } = validate([
       action('click', { ref: '@e1' }),
       action('type', { ref: '@e1', args: { text: 'hi' } }),
       action('scroll', { args: { direction: 'down' } }),
       action('press', { args: { key: 'Enter' } }),
+      action('wait', { args: { ms: 10 } }),
       action('done', { args: {} }),
     ], { '@e1': 111 }, registry);
     assert.strictEqual(errors.length, 0, JSON.stringify(errors));
-    assert.strictEqual(ok.length, 5);
+    assert.strictEqual(ok.length, 6);
   });
 
   await test('click accepts both @e and @t targets', () => {
@@ -477,6 +478,7 @@ async function validateSuite() {
       [action('type', { ref: '@e1', args: {} }), /missing required arg "text"/],
       [action('click', { ref: '@e9' }), /not present in current snapshot/],
       [action('scroll', { args: {} }), /missing required arg "direction"/],
+      [action('wait', { args: {} }), /missing required arg "ms"/],
     ];
     for (const [act, re] of cases) {
       const { ok, errors } = validate([act], lookup, registry);
@@ -604,6 +606,25 @@ async function executeSuite() {
     assert.strictEqual(obs.status, 'ok');
     assert.strictEqual(session.calls.length, 0, 'done dispatches nothing');
     assert.strictEqual(session.settleArgs.length, 0, 'done does not settle');
+  });
+
+  await test('wait sleeps without backend dispatch and still settles', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, { afterActionMs: 0, maxMs: 0 });
+    const [obs] = await exec.execute([action('wait', { args: { ms: 1 } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'ok', obs.error);
+    assert.deepStrictEqual(obs.detail, { waitedMs: 1 });
+    assert.strictEqual(session.calls.length, 0, 'wait dispatches no backend input');
+    assert.deepStrictEqual(session.settleArgs[0], { afterActionMs: 0, maxMs: 0 });
+  });
+
+  await test('wait rejects unreasonable durations', async () => {
+    const session = makeFakeSession([makeBrief()]);
+    const exec = createExecutor({ backend: 'cdp' }, {});
+    const [obs] = await exec.execute([action('wait', { args: { ms: 30001 } })], session, makeBrief());
+    assert.strictEqual(obs.status, 'error');
+    assert.match(obs.error, /wait\.ms/);
+    assert.strictEqual(session.settleArgs.length, 0, 'rejected wait does not settle');
   });
 
   await test('settle receives the run settle config', async () => {
@@ -919,11 +940,13 @@ async function promptSuite() {
     const prompt = buildSystemPrompt({
       click: registry.click,
       type: registry.type,
+      wait: registry.wait,
       take_screenshot: registry.take_screenshot,
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
     assert.ok(prompt.includes('type[@e] (text: string, clear: boolean?)'), 'required + optional args should be shown');
+    assert.ok(prompt.includes('wait (ms: number)'), 'wait args should be shown');
     assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, hint: string?)'), 'optional ref types should be shown');
     assert.ok(prompt.includes('done (result: string?)'), 'optional args should be marked');
   });
@@ -962,18 +985,19 @@ async function tokenSuite() {
 async function loopSuite() {
   console.log('\nloop:');
 
-  await test('type → press → scroll → done drives to completed', async () => {
+  await test('type → press → scroll → wait → done drives to completed', async () => {
     installFakeProvider([
       [action('type', { ref: '@e1', args: { text: 'hello' } })],
       [action('press', { args: { key: 'Enter' } })],
       [action('scroll', { args: { direction: 'down' } })],
+      [action('wait', { args: { ms: 1 } })],
       [action('done', { args: { result: 'searched' } })],
     ]);
-    const session = makeFakeSession([makeBrief, makeBrief, makeBrief, makeBrief]);
+    const session = makeFakeSession([makeBrief, makeBrief, makeBrief, makeBrief, makeBrief]);
     const r = await run({ session, task: 'search hello', config: baseConfig() });
     assert.strictEqual(r.status, 'completed', r.error);
     assert.strictEqual(r.result, 'searched');
-    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['type', 'press', 'scroll', 'done']);
+    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['type', 'press', 'scroll', 'wait', 'done']);
     assert.ok(session.calls.some(c => c[0] === 'insertText' && c[1].text === 'hello'));
     assert.ok(session.calls.some(c => c[0] === 'key' && c[1].key === 'Enter'));
     assert.ok(session.calls.some(c => c[0] === 'mouse' && c[1].type === 'mouseWheel'));

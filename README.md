@@ -97,7 +97,7 @@ providers, executor modes, and competing browser approaches.
 
 Open Recon is not just a clicker.
 
-- navigate, click, type, press, scroll, go back
+- navigate, click, type, press, scroll, wait, go back
 - follow popups and new tabs when the browser opens them
 - hit-test clicks and avoid obvious covered targets
 - read text without selecting the whole page

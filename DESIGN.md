@@ -230,7 +230,7 @@ Rules:
 | `get_files` | List downloadable file links (PDFs, docs, archives) | Top-level, `changesPage:false`, `idempotentRead`. Same scanner as `get_images`, filtered to `<a href>`/`<embed>`/`<object>`/`<iframe>` whose target looks like a file (extension or `download` attr). |
 | `save_text` | Save model-authored text to the run | Top-level, `changesPage:false`. Loop-level (special-cased in `execute.js`, no backend, no extra LLM call). `content` → `runs/<id>/assets/note-N.txt`; only the model's `summary` re-enters the event log. |
 | `save_file` | Download the bytes at a URL and save them | Top-level, `changesPage:false`. URL typically from `get_images`/`get_files`. Download is no-page-JS: `data:` decode → `Page.getResourceContent` (cached, exact, no CSP) → `Network.loadNetworkResource` (cold, CSP-limited). Image → vision summary; else metadata. Bytes → `assets/`; summary re-enters the event log. See `lib/savefile.js`. |
-| `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
+| `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only; `ms` is capped at 30000. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
 | `done` | Signal task completion | Loop captures the optional `result` string and exits with status `completed`. |
 
 ### `done` semantics
