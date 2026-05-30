@@ -387,7 +387,6 @@ async function osGateSuite() {
   // over the Swift binary, not a CDP client, so ensureInputSafe must never reach
   // for `.Page` (foregrounding lives in pageToScreen, which holds the CDP client).
   const fakeClient = (overrides = {}) => ({
-    verbose: false,
     idleGuard: { enabled: false, thresholdMs: 0 },
     send: async ({ op }) => (op === 'frontapp' ? { bundleId: 'com.google.Chrome' } : {}),
     ...overrides,

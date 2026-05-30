@@ -12,7 +12,6 @@ function parseArgs() {
     else if (arg === '--in-viewport-only') opts.inViewportOnly = true;
     else if (arg === '--pretty')      opts.pretty = true;
     else if (arg === '--launch')      opts._launchOnly = true;
-    else if (arg === '--verbose')     opts.verbose = true;
     else throw new Error(`unknown option: ${arg}`);
   }
   return opts;
@@ -34,16 +33,14 @@ async function main() {
     return;
   }
 
-  if (opts.verbose) process.stderr.write(`Connecting to Chrome on port ${opts.port || 9222}...\n`);
+  process.stderr.write(`Connecting to Chrome on port ${opts.port || 9222}...\n`);
 
   const result = await extract(opts);
 
-  if (opts.verbose) {
-    const s = result.stats;
-    const count = s.returned ?? s.interactiveReturned;
-    process.stderr.write(`Attached to: ${result.title} (${result.url})\n`);
-    process.stderr.write(`Done. ${count} elements in ${s.elapsedMs}ms\n`);
-  }
+  const s = result.stats;
+  const count = s.returned ?? s.interactiveReturned;
+  process.stderr.write(`Attached to: ${result.title} (${result.url})\n`);
+  process.stderr.write(`Done. ${count} elements in ${s.elapsedMs}ms\n`);
 
   process.stdout.write(opts.pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result));
   process.stdout.write('\n');

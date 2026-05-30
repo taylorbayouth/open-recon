@@ -32,7 +32,7 @@ function usageError(message) {
 // set (everything else stays undefined), so deepMerge leaves config-file values
 // intact for unspecified flags.
 function parseArgs(argv) {
-  const args = { task: null, verbose: false };
+  const args = { task: null };
   const override = { loop: {}, executor: {} };
   const positional = [];
 
@@ -56,7 +56,6 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task' || a === '-t') args.task = value(argv, i++, a);
-    else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--provider' || a === '-p') override.provider = value(argv, i++, a);
     else if (a === '--model') override.model = value(argv, i++, a);
     else if (a === '--context' || a === '-c') override.context = value(argv, i++, a);
@@ -85,7 +84,6 @@ Options:
                                prompt. Omit for none.
   --poll-ms <n>                Wait between re-checks while the page is unchanged
   --executor <os|cdp>          Input backend. Default 'os' uses recon-input (macOS).
-  --verbose, -v                Log each loop turn to stderr
   --help, -h                   Show this help
 
 Config file:
@@ -148,7 +146,7 @@ async function main() {
   // Preflight gets the environment ready (and launches Chrome). Its errors are
   // user-facing setup guidance, so print them plainly without a stack trace.
   try {
-    await preflight({ config, port: 9222, verbose: args.verbose });
+    await preflight({ config, port: 9222 });
   } catch (err) {
     if (err instanceof PreflightError) {
       console.error(err.message);
@@ -160,7 +158,7 @@ async function main() {
   let session;
   try {
     session = await connect({ port: 9222, collapseNewTabs: config.collapseNewTabs });
-    const runArtifact = await run({ session, task: args.task, config, verbose: args.verbose });
+    const runArtifact = await run({ session, task: args.task, config });
     process.stdout.write((runArtifact.report || JSON.stringify(runArtifact, null, 2)) + '\n');
     process.exitCode = runArtifact.status === 'completed' ? 0 : 1;
   } finally {

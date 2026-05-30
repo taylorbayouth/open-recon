@@ -72,7 +72,7 @@ Open Recon is fast because it does less.
   text view in hundreds of milliseconds.
 - **Tiny prompts**: the model sees refs, labels, state, and positions, not a full
   DOM or image every turn.
-- **Prompt-cache friendly**: stable system/tool prefixes; verbose output shows
+- **Prompt-cache friendly**: stable system/tool prefixes; terminal output shows
   cache percentage as the run warms.
 - **No-change polling**: if the page has not changed, it waits and rechecks
   instead of burning another LLM call.
@@ -135,7 +135,7 @@ npm install
 Run a task:
 
 ```bash
-node agent.js --verbose "Go to github.com/trending/javascript?since=daily. \
+node agent.js "Go to github.com/trending/javascript?since=daily. \
 Collect the first 5 repositories with owner/name, description, total stars, \
 and stars today. Return a compact markdown table."
 ```

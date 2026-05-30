@@ -8,7 +8,6 @@
 //   node bench.js
 //   node bench.js --provider anthropic --model claude-opus-4-7
 //   node bench.js --tasks wiki-shannon,hn-top
-//   node bench.js --verbose
 //
 // Requires Chrome running on :9222 (npm run launch).
 // Defaults to --executor cdp so no macOS driver or Accessibility permission is needed.
@@ -66,13 +65,12 @@ const TASKS = [
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const args = { provider: null, model: null, tasks: null, verbose: false, executor: 'cdp' };
+  const args = { provider: null, model: null, tasks: null, executor: 'cdp' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--provider' || a === '-p') args.provider = argv[++i];
     else if (a === '--model') args.model = argv[++i];
     else if (a === '--tasks') args.tasks = argv[++i]?.split(',');
-    else if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--executor') args.executor = argv[++i];
     else if (a === '--help' || a === '-h') {
       console.log(`Usage: node bench.js [options]
@@ -82,7 +80,6 @@ Options:
   --model <id>             Override the provider's default model
   --tasks <ids>            Comma-separated task IDs to run (default: all)
   --executor <cdp|os>      Input backend (default: cdp)
-  --verbose, -v            Show per-turn agent output
   --help, -h               Show this help
 
 Available task IDs: ${TASKS.map(t => t.id).join(', ')}`);
@@ -144,7 +141,7 @@ async function main() {
 
     let artifact;
     try {
-      artifact = await run({ session, task: task.task, config, verbose: args.verbose });
+      artifact = await run({ session, task: task.task, config });
     } catch (err) {
       console.error(`   run failed: ${err.message}`);
       results.push({ task, status: 'run-error', passed: false });

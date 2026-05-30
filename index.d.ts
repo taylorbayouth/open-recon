@@ -189,8 +189,6 @@ export interface ExtractOptions {
   interactiveRoles?: string[];
   /** Override default container role set (tree mode only). */
   containerRoles?: string[];
-  /** Print progress to stderr. Default: false */
-  verbose?: boolean;
 }
 
 export interface LaunchOptions {
