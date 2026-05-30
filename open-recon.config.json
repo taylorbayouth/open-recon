@@ -8,7 +8,12 @@
     "shortCircuitOnNoChange": true,
     "pollMs": 1500,
     "maxNoChangePolls": 3,
-    "maxEmptyPlans": 3
+    "maxStuckRepeats": 2,
+    "maxEmptyPlans": 3,
+    "maxSparsePageRetries": 4,
+    "sparsePageRetryMs": 400,
+    "sparsePageMinNodes": 2,
+    "maxSameIntentScrolls": 3
   },
 
   "settle": {
