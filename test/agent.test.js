@@ -1001,6 +1001,37 @@ async function loopSuite() {
     assert.strictEqual(r.steps.length, 2);
   });
 
+  await test('screenshot repeated-read guard is crop-ref aware', async () => {
+    const visionMod = require('../lib/vision');
+    const origDescribe = visionMod.describe;
+    visionMod.describe = async () => ({ summary: 'short', description: 'full' });
+    const mkBrief = () => makeBrief({
+      regions: [
+        { ref: '@r1', role: 'image', bbox: { x: 0, y: 0, width: 10, height: 10 } },
+        { ref: '@r2', role: 'image', bbox: { x: 20, y: 0, width: 10, height: 10 } },
+        { ref: '@r3', role: 'image', bbox: { x: 40, y: 0, width: 10, height: 10 } },
+      ],
+      lookup: { '@e1': 111, '@t1': 222, '@r1': 1, '@r2': 2, '@r3': 3 },
+    });
+    const runRefs = async (refs) => {
+      installFakeProvider([...refs.map(ref => [action('take_screenshot', { ref })]), [action('done', { args: {} })]]);
+      const session = makeFakeSession([mkBrief]);
+      session.client.Page = { captureScreenshot: async () => ({ data: Buffer.from('png').toString('base64') }) };
+      return run({ session, task: 'inspect crops', config: baseConfig({ loop: { maxSteps: 5, maxStuckRepeats: 2 }, scratchpad: { enabled: false } }) });
+    };
+    try {
+      const distinct = await runRefs(['@r1', '@r2', '@r3']);
+      assert.strictEqual(distinct.status, 'completed', distinct.error);
+      assert.deepStrictEqual(distinct.steps.slice(0, 3).map(s => s.action.ref), ['@r1', '@r2', '@r3']);
+
+      const repeated = await runRefs(['@r1', '@r1', '@r1']);
+      assert.strictEqual(repeated.status, 'stuck', repeated.error);
+      assert.deepStrictEqual(repeated.steps.map(s => s.action.ref), ['@r1', '@r1']);
+    } finally {
+      visionMod.describe = origDescribe;
+    }
+  });
+
   await test('error-repeat guard aborts when a re-issued action keeps erroring', async () => {
     installFakeProvider([[action('click', { ref: '@e1' })]]);  // same click every turn
     const session = makeFakeSession([makeBrief]);              // brief stable across turns
