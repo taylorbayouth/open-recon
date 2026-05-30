@@ -174,6 +174,7 @@ Open Recon talks to providers through a small planning facade:
 
 - OpenAI
 - Anthropic
+- Gemini
 - Ollama
 
 Defaults live in `open-recon.config.json`. Environment variables override the
@@ -184,6 +185,7 @@ Useful flags:
 ```bash
 node agent.js --provider openai --model gpt-5.4-mini "..."
 node agent.js --provider anthropic "..."
+node agent.js --provider gemini --model gemini-3.1-pro "..."
 node agent.js --provider ollama --model llama3.1 "..."
 node agent.js --executor cdp "..."
 node agent.js --context "Trusted operator context here" "..."

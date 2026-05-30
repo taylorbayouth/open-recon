@@ -364,7 +364,7 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `executor.userIdleMs` | `600` | OS backend: how long the human must be idle before input resumes. |
 | `executor.raiseChromeOnStart` | `true` | OS backend: preflight foregrounds the agent's Chrome (PID-targeted) so the frontmost-gate is satisfied without manual clicking. |
 | `executor.humanize.*` | — | OS-backend motion/timing knobs (see Executor backends). |
-| `vision.provider` | `openai` | Vision model provider for the image-summary path (`take_screenshot`, and `save_file` on images) — `openai`/`anthropic`/`ollama`. Independent of the planner `provider`. |
+| `vision.provider` | `openai` | Vision model provider for the image-summary path (`take_screenshot`, and `save_file` on images) — `openai`/`anthropic`/`gemini`/`ollama`. Independent of the planner `provider`. |
 | `vision.model` | `null` | `null` → a multimodal default for the chosen provider. |
 | `vision.prompt` | `"Describe what you see…"` | Static base prompt sent with the image; a per-call `hint` is appended. |
 | `vision.maxTokens` | `1024` | Output cap for the vision call. |

@@ -4,7 +4,7 @@
   "reasoningEffort": "medium",
 
   "loop": {
-    "maxSteps": 150,
+    "maxSteps": 100,
     "shortCircuitOnNoChange": true,
     "pollMs": 1500,
     "maxNoChangePolls": 3,
@@ -37,7 +37,7 @@
     "humanize": {
       "enabled": true,
       "mouseSpeedPxPerSec": 1400,
-      "mouseJitterPx": 2,
+      "mouseJitterPx": 4,
       "keystrokeDelayMsMin": 25,
       "keystrokeDelayMsMax": 85,
       "postFocusPauseMs": 80,
@@ -45,7 +45,7 @@
       "preClickPauseMsMin": 40,
       "preClickPauseMsMax": 160,
       "scrollDurationMs": 400,
-      "scrollJitterPx": 3
+      "scrollJitterPx": 4
     }
   },
 

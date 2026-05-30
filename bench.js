@@ -7,6 +7,7 @@
 // Usage:
 //   node bench.js
 //   node bench.js --provider anthropic --model claude-opus-4-7
+//   node bench.js --provider gemini --model gemini-3.1-pro
 //   node bench.js --tasks wiki-shannon,hn-top
 //
 // Requires Chrome running on :9222 (npm run launch).
@@ -76,7 +77,7 @@ function parseArgs(argv) {
       console.log(`Usage: node bench.js [options]
 
 Options:
-  --provider, -p <name>    LLM provider: openai | anthropic | ollama
+  --provider, -p <name>    LLM provider: openai | anthropic | gemini | ollama
   --model <id>             Override the provider's default model
   --tasks <ids>            Comma-separated task IDs to run (default: all)
   --executor <cdp|os>      Input backend (default: cdp)
