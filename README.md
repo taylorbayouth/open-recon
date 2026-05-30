@@ -1,6 +1,6 @@
 # Open Recon
 
-**Regular Chrome. Agent-grade perception. Mac-level stealth.**
+**Regular Chrome. Agent-grade perception. OS-level stealth.**
 
 Agents are learning to browse the web. The web has already learned to spot them.
 
@@ -47,10 +47,11 @@ Open Recon is built around a different threat model: use normal Chrome, avoid
 page-visible automation, pass the model only the minimum rendered structure it
 needs, and make every expensive action deliberate.
 
-On macOS, the default `os` executor sends input through `CGEventPost`, the same
-OS event path used by real mouse and keyboard input. It humanizes movement and
-typing, refuses to type into the wrong foreground app, and pauses while you use
-the machine.
+On macOS and Linux, the default `os` executor sends input through the OS's own
+trusted input path — `CGEventPost` on macOS, XTEST on Linux — the same channel
+used by real mouse and keyboard hardware. It humanizes movement and typing,
+refuses to type into the wrong foreground app, and pauses while you use the
+machine.
 
 From the site's side, the important parts look boring:
 
@@ -160,11 +161,13 @@ Open Recon has two execution lanes:
 
 | Lane | Best for | Runs where | Detection profile |
 |---|---|---|---|
-| `os` | real sites, logged-in browsing, stealth runs | macOS | lowest: trusted OS input, humanized timing |
-| `cdp` | CI, tests, local iteration, non-macOS hosts | Chrome/Chromium via DevTools | higher: synthetic input |
+| `os` | real sites, logged-in browsing, stealth runs | macOS, Linux (X11) | lowest: trusted OS input, humanized timing |
+| `cdp` | CI, tests, local iteration | Chrome/Chromium via DevTools | higher: synthetic input |
 
 The core extractor and agent loop are plain Node + Chrome DevTools Protocol.
-The low-detection input backend is macOS today.
+The low-detection input backend runs on macOS (`CGEventPost`) and Linux
+(`XTEST`). On Linux, Chrome must run as an X client (the default); launching
+with `--ozone-platform=wayland` bypasses X11 and falls back to `cdp`.
 
 ## Providers
 
@@ -236,7 +239,7 @@ accounts and walk away.
 
 Good places to push:
 
-- Linux/Windows OS-level input backends
+- Linux Wayland input backend (current `os` executor requires X11/Xwayland)
 - stronger evals in `bench.js`
 - more providers behind the existing planning facade
 - better detector-facing measurements for humanized input
