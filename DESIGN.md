@@ -337,7 +337,12 @@ DEFAULTS (lib/config.js)  <  open-recon.config.json  <  env vars  <  CLI flags
 | `loop.shortCircuitOnNoChange` | `true` | Skip the LLM call while the page is byte-identical (see below). |
 | `loop.pollMs` | `1500` | Wait between re-checks while the page is unchanged. |
 | `loop.maxNoChangePolls` | `10` | Give up waiting after this many polls and let the model act/finish. |
+| `loop.maxStuckRepeats` | `2` | Stop after the same ineffective/errored/idempotent read action repeats this many times. |
 | `loop.maxEmptyPlans` | `3` | Stop after this many consecutive LLM turns with no actions. |
+| `loop.maxSparsePageRetries` | `4` | After URL change, retry sparse snapshots this many times before prompting. |
+| `loop.sparsePageRetryMs` | `400` | Wait between sparse post-navigation re-extracts. |
+| `loop.sparsePageMinNodes` | `2` | Elements + text + regions below this count is considered sparse. |
+| `loop.maxSameIntentScrolls` | `3` | Add a pivot warning after this many consecutive same-intent scrolls on one page. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `os` | `os` or `cdp` (also `OPEN_RECON_EXECUTOR`). |
@@ -378,6 +383,10 @@ The biggest hidden risk in any browser-agent loop is snapshotting mid-transition
 The heavier "is the page actually done changing?" question is answered by the loop's no-change short-circuit (above), which polls the content hash rather than the wall clock. A future refinement can make `settle()` itself event-driven — return on the first of `Page.lifecycleEvent` (`networkAlmostIdle`/`load`) or an AX-tree-quiet window — but the hash-poll already covers the practical case without per-poll CDP wiring.
 
 The LLM verb `wait` is *not* the settle mechanism — it's for deliberate pauses (animation, debouncing, throttled UI). Settle still runs after every `wait`.
+
+After a URL-changing action, Loop also retries sparse snapshots before prompting (`loop.maxSparsePageRetries`, `loop.sparsePageRetryMs`, `loop.sparsePageMinNodes`). This catches pages that have committed navigation but not yet hydrated enough DOM/accessibility content, avoiding premature screenshot fallbacks on temporarily empty pages.
+
+Loop tracks consecutive scrolls with the same `intent` on the same page. Once `loop.maxSameIntentScrolls` is reached, it adds a warning to prompt history telling the model to pivot, save findings, go back, or finish. This is advisory, not a hard rejection.
 
 ---
 
@@ -427,6 +436,7 @@ Each Plan call is therefore just `{ system, tools, messages: [ <one user message
 - **Linear, not quadratic.** Only the current page is ever shown in full; old snapshots collapse to one event line each. The system prompt + tool defs remain the stable, cacheable prefix.
 - **Provider-agnostic with no pairing.** Because no `tool_use`/`tool_result` blocks are replayed, there is no `tool_use_id` to thread and no role-alternation constraint — every provider gets a single user turn.
 - **Derived, not summarized by a model.** The log comes straight from the Steps the loop already records (`describeAction` resolves a ref to its element name) plus URL deltas, so it costs no extra LLM call and can't hallucinate state.
+- **Intent breadcrumbs.** Each tool schema includes optional `intent` metadata. The system prompt requires it to stay under 15 words, and the loop logs it next to the action so the next turn knows why the agent is on the current page without adding another LLM call.
 
 The known limitation: an event log captures actions, navigations, and errors, but not arbitrary page text that appeared and then vanished. A future `note`/`extract` verb would let the model deliberately persist a fact into the log.
 
