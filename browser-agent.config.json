@@ -53,15 +53,15 @@
     "raiseChromeOnStart": true,
     "humanize": {
       "enabled": true,
-      "mouseSpeedPxPerSec": 1400,
+      "mouseSpeedPxPerSec": 2000,
       "mouseJitterPx": 4,
-      "keystrokeDelayMsMin": 25,
-      "keystrokeDelayMsMax": 85,
+      "keystrokeDelayMsMin": 10,
+      "keystrokeDelayMsMax": 60,
       "postFocusPauseMs": 80,
       "postClearPauseMs": 50,
       "preClickPauseMsMin": 40,
       "preClickPauseMsMax": 160,
-      "scrollDurationMs": 400,
+      "scrollDurationMs": 300,
       "scrollJitterPx": 4
     }
   },
