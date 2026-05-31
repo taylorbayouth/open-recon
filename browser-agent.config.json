@@ -9,11 +9,14 @@
     "pollMs": 1500,
     "maxNoChangePolls": 3,
     "maxStuckRepeats": 2,
-    "maxEmptyPlans": 3,
+    "maxEmptyPlans": 1,
+    "maxUrlVisits": 4,
+    "revisitUrlMatch": "clean",
     "maxSparsePageRetries": 4,
     "sparsePageRetryMs": 400,
     "sparsePageMinNodes": 2,
-    "maxSameDirectionScrolls": 3
+    "maxSameDirectionScrolls": 3,
+    "maxScrollReversals": 3
   },
 
   "reflect": {

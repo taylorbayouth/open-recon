@@ -1327,8 +1327,66 @@ async function loopSuite() {
       config: baseConfig({ loop: { maxSameDirectionScrolls: 3 } }),
     });
     assert.strictEqual(r.status, 'completed', r.error);
-    assert.match(reqs[3].messages[0].content, /WARNING: scroll down repeated 3x on this page/);
-    assert.match(reqs[3].messages[0].content, /pivot, save findings, go back, or finish/);
+    assert.match(reqs[3].messages[0].content, /scrolled down 3x on this page without finding the target/);
+    assert.match(reqs[3].messages[0].content, /save what's useful, go back, or finish/);
+  });
+
+  await test('monotonic scrolling never triggers a reflection turn', async () => {
+    // Long-page reading (all down) earns only the soft warning — it must NOT
+    // escalate to a moment of silence, no matter how many scrolls.
+    installFakeProvider([
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('scroll', { args: { direction: 'down' } })],
+      [action('done', { args: {} })],
+    ]);
+    let sy = 0;
+    const briefs = Array.from({ length: 6 }, () =>
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: (sy += 600), contentHeight: 9000 } }));
+    const session = makeFakeSession(briefs);
+    const r = await run({
+      session,
+      task: 'x',
+      config: baseConfig({ loop: { maxScrollReversals: 3, maxSameDirectionScrolls: 3 } }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.ok(!r.completions.some(c => /moment of silence|scroll-oscillation/.test(JSON.stringify(c))),
+      'monotonic scrolling must not fire a reflection');
+  });
+
+  await test('scroll oscillation (down↔up) fires a reflection turn', async () => {
+    const reqs = installFakeProvider(
+      [
+        [action('scroll', { args: { direction: 'down' } })],
+        [action('scroll', { args: { direction: 'up' } })],   // reversal 1
+        [action('scroll', { args: { direction: 'down' } })], // reversal 2
+        [action('scroll', { args: { direction: 'up' } })],   // reversal 3 → escalate
+        [action('done', { args: {} })],                       // pivot after the moment of silence
+      ],
+      ['Pivot: save the section then go back to search'],     // the reflection decision
+    );
+    // Oscillating scrollY so the page "changes" each turn, proving escalation
+    // keys on direction reversals, not on a frozen page.
+    const ys = [600, 0, 600, 0, 600];
+    const session = makeFakeSession(ys.map(y =>
+      makeBrief({ viewport: { width: 1000, height: 800, scrollX: 0, scrollY: y, contentHeight: 3000 } })));
+    const r = await run({
+      session,
+      task: 'x',
+      config: baseConfig({
+        loop: { maxScrollReversals: 3 },
+        reflect: { enabled: true, maxReflections: 5, cooldownTurns: 0 },
+      }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const reflectCalls = reqs.filter(q => !q.tools || q.tools.length === 0);
+    assert.strictEqual(reflectCalls.length, 1, 'exactly one reflection (no-tools) turn fired from the oscillation');
+    // The reflection prompt names the thrashing explicitly so the model pivots.
+    assert.match(reflectCalls[0].messages[0].content, /scrolled back and forth on this page/);
+    const reflectCompletion = r.completions.find(c => Array.isArray(c.actions) && c.actions.length === 0 && c.text);
+    assert.ok(reflectCompletion, 'the reflection decision is recorded as a completion');
   });
 
   await test('screenshot repeated-read guard is crop-ref aware', async () => {
@@ -1534,6 +1592,33 @@ async function loopSuite() {
     await run({ session, task: 'x', config: baseConfig({ loop: { shortCircuitOnNoChange: false } }) });
     assert.ok(!/REVISIT/.test(reqs[0].messages[0].content), 'first visit to /a is not flagged');
     assert.match(reqs[2].messages[0].content, /REVISIT — you've already been here 1×/, 'revisit to /a is flagged');
+  });
+
+  await test('arriving at the same page too many times fires a reflection turn', async () => {
+    const reqs = installFakeProvider(
+      [
+        [action('scroll', { args: { direction: 'down' } })],  // turn 1 @ /a (visit 1)
+        [action('scroll', { args: { direction: 'down' } })],  // turn 2 @ /b
+        // turn 3 arrives @ /a (visit 2) → reflect fires before any action is planned
+        [action('done', { args: {} })],                       // post-pivot turn @ /a
+      ],
+      ['Pivot: search a different source instead of reopening /a'],
+    );
+    const mk = (url) => () => makeBrief({ url });
+    const session = makeFakeSession([
+      mk('http://x.test/a'), mk('http://x.test/b'), mk('http://x.test/a'), mk('http://x.test/a'),
+    ]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({
+        loop: { shortCircuitOnNoChange: false, maxUrlVisits: 2 },
+        reflect: { enabled: true, maxReflections: 5, cooldownTurns: 0, budgetTurnFraction: 0.99 },
+      }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const reflectCalls = reqs.filter(q => !q.tools || q.tools.length === 0);
+    assert.strictEqual(reflectCalls.length, 1, 'the 2nd arrival at /a fires exactly one reflection');
+    assert.match(reflectCalls[0].messages[0].content, /arrived on this page 2 times/);
   });
 
   await test('repeating an action does NOT abort when the page keeps changing', async () => {
