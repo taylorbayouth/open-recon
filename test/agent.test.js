@@ -1,9 +1,8 @@
 'use strict';
 
 // Agent-half tests: reduce, validate, execute (cdp backend), and the full loop
-// driven by a fake provider + fake session. No Chrome and no network — none of
-// these modules pull in chrome-remote-interface, so this file runs anywhere
-// (unlike test.js, whose integration half needs a live browser).
+// driven by a fake provider + fake session. No Chrome and no network; launch
+// tests stub CDP/process discovery rather than touching a real browser.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -978,6 +977,81 @@ async function configSuite() {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+}
+
+async function withLaunchMocks({ pids = [], commands = {}, livePorts = [] }, fn) {
+  const childProcess = require('child_process');
+  const CDP = require('chrome-remote-interface');
+  const launchPath = require.resolve('../lib/launch');
+  const oldExecFileSync = childProcess.execFileSync;
+  const oldList = CDP.List;
+  delete require.cache[launchPath];
+
+  childProcess.execFileSync = (cmd, args, opts) => {
+    if (cmd === 'pgrep') {
+      if (!pids.length) throw new Error('no process');
+      return `${pids.join('\n')}\n`;
+    }
+    if (cmd === 'ps') {
+      const pid = args[args.indexOf('-p') + 1];
+      if (commands[pid]) return commands[pid];
+      throw new Error(`unknown pid ${pid}`);
+    }
+    return oldExecFileSync(cmd, args, opts);
+  };
+  CDP.List = async ({ port }) => {
+    if (livePorts.includes(Number(port))) return [];
+    throw new Error(`no CDP on ${port}`);
+  };
+
+  try {
+    return await fn(require('../lib/launch'));
+  } finally {
+    childProcess.execFileSync = oldExecFileSync;
+    CDP.List = oldList;
+    delete require.cache[launchPath];
+  }
+}
+
+async function launchSuite() {
+  console.log('\nlaunch:');
+
+  await test('remoteDebuggingPortFromCommand parses Chrome command lines', () => {
+    const { remoteDebuggingPortFromCommand } = require('../lib/launch');
+    assert.strictEqual(remoteDebuggingPortFromCommand('chrome --remote-debugging-port=9223 --user-data-dir=/tmp/p'), 9223);
+    assert.strictEqual(remoteDebuggingPortFromCommand('chrome --remote-debugging-port 9333'), 9333);
+    assert.strictEqual(remoteDebuggingPortFromCommand('chrome --remote-debugging-port=0'), null);
+    assert.strictEqual(remoteDebuggingPortFromCommand('chrome'), null);
+  });
+
+  await test('profile ownership is tied to the same debug port', async () => {
+    if (process.platform === 'win32') return;
+    await withLaunchMocks({
+      pids: ['101', '102'],
+      commands: {
+        101: 'Google Chrome --user-data-dir=/tmp/browser-agent-profile --remote-debugging-port=9223',
+        102: 'Google Chrome --type=renderer --user-data-dir=/tmp/browser-agent-profile --remote-debugging-port=9223',
+      },
+      livePorts: [9222, 9223],
+    }, async ({ isOwnChrome, debugPortForProfile }) => {
+      assert.strictEqual(await debugPortForProfile('/tmp/browser-agent-profile'), 9223);
+      assert.strictEqual(await isOwnChrome(9223, '/tmp/browser-agent-profile'), true);
+      assert.strictEqual(await isOwnChrome(9222, '/tmp/browser-agent-profile'), false);
+    });
+  });
+
+  await test('launch reuses an existing browser-agent profile on a non-default port', async () => {
+    if (process.platform === 'win32') return;
+    await withLaunchMocks({
+      pids: ['201'],
+      commands: {
+        201: 'Google Chrome --user-data-dir=/tmp/browser-agent-profile --remote-debugging-port=9224',
+      },
+      livePorts: [9224],
+    }, async ({ launch }) => {
+      assert.strictEqual(await launch({ port: 9222, userDataDir: '/tmp/browser-agent-profile' }), 9224);
+    });
   });
 }
 
@@ -2463,6 +2537,7 @@ async function postJSONSuite() {
   await executeSuite();
   await targetingSuite();
   await configSuite();
+  await launchSuite();
   await scratchpadSuite();
   await saveFileSuite();
   await logSuite();

@@ -275,8 +275,8 @@ export declare function connect(opts?: ExtractOptions & LaunchOptions): Promise<
 /** One-shot: connect, extract, disconnect. */
 export declare function extract(opts?: ExtractOptions & LaunchOptions): Promise<ExtractionResult>;
 
-/** Launch Chrome with remote debugging enabled. No-op if already running. */
-export declare function launch(opts?: LaunchOptions): Promise<void>;
+/** Launch or reuse the isolated Chrome profile and return its CDP debugging port. */
+export declare function launch(opts?: LaunchOptions): Promise<number>;
 
 /** Check if Chrome is already listening on the given port. */
 export declare function isRunning(port?: number): Promise<boolean>;
