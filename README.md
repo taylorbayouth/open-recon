@@ -29,7 +29,7 @@ The model gets the page like this:
 ```
 
 Then it acts on refs. Click `@e14`. Read `@r2`. Save the PDF. Finish with a
-Markdown report.
+task-specific Markdown report synthesized from saved evidence, plus an HTML copy.
 
 No Playwright. No Puppeteer. No cloned browser runtime. No screenshot tax unless
 pixels actually matter.
@@ -106,16 +106,18 @@ Browser Agent is not just a clicker.
 - screenshot the viewport or crop exactly to a ref
 - list images and downloadable files without page JS
 - save real bytes from loaded resources when possible
-- save notes, images, screenshots, PDFs, docs, and archives to disk
-- return a complete Markdown report
+- save text snippets, images, screenshots, PDFs, docs, and archives to disk
+- return a complete Markdown report and browser-readable HTML copy
 
 Every run gets a workspace:
 
 ```text
 runs/<run-id>/
   report.md
+  report.html
+  saved.md
+  saved-index.md
   assets/
-    note-1.txt
     screenshot-1.jpg
     product-sheet.pdf
     hero-image.png
@@ -145,6 +147,11 @@ node agent.js "Go to github.com/trending/javascript?since=daily. \
 Collect the first 5 repositories with owner/name, description, total stars, \
 and stars today. Return a compact markdown table."
 ```
+
+`node agent.js` writes progress to stderr and one compact JSON handoff object to
+stdout. The handoff includes the final Markdown plus absolute paths for
+`report.md`, `report.html`, `saved.md`, `saved-index.md`, assets, and logs, so
+another agent should parse stdout and use the paths instead of inferring cwd.
 
 The first run performs preflight:
 

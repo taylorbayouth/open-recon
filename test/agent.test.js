@@ -21,6 +21,7 @@ const { estimateTokens } = require('../lib/tokens');
 const shared = require('../lib/providers/_shared');
 const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/executors/page');
 const { createScratchpad, filenameStemFromHint } = require('../lib/scratchpad');
+const { buildHandoff } = require('../agent');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, collectPasswordIds, buildSnapshotMaps } = require('../lib/extract');
 const { cleanWebText, decodeHtmlEntities } = require('../lib/text');
@@ -102,10 +103,9 @@ function installFakeProvider(turns, reflectTurns = []) {
     defaultModel: 'fake-1',
     async plan(req) {
       requests.push(req);
-      // A no-tools call is a reflection turn: a real provider can only reply with
-      // prose, so we return text and do NOT advance the action queue. Empty text
-      // (the default) models "no usable decision" → the loop falls through to its
-      // normal guard, which is what the isolated guard tests expect.
+      // A no-tools call is reflection or final report synthesis: a real provider
+      // can only reply with prose, so we return text and do NOT advance the action
+      // queue. Empty text models "no usable decision" for isolated guard tests.
       if (!req.tools || req.tools.length === 0) {
         const text = reflectTurns.length ? reflectTurns[Math.min(r, reflectTurns.length - 1)] : '';
         r++;
@@ -127,12 +127,14 @@ function installFakeProvider(turns, reflectTurns = []) {
 
 let tuSeq = 0;
 function action(verb, extra = {}) {
-  return { kind: 'action', verb, args: {}, toolUseId: `tu_${verb}_${++tuSeq}`, ...extra };
+  const { args = {}, ...rest } = extra;
+  return { kind: 'action', verb, args: { intent: 'test intent', ...args }, toolUseId: `tu_${verb}_${++tuSeq}`, ...rest };
 }
 
 const baseConfig = (overrides = {}) => ({
   provider: 'fake',
   model: null,
+  context: overrides.context ?? null,
   loop: { maxSteps: 10, shortCircuitOnNoChange: false, pollMs: 0, maxNoChangePolls: 1, maxEmptyPlans: 3, ...(overrides.loop || {}) },
   settle: { afterActionMs: 0, maxMs: 0 },
   view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
@@ -141,6 +143,9 @@ const baseConfig = (overrides = {}) => ({
   // Reflection off by default so the guard tests exercise
   // the stuck/empty/max-steps aborts in isolation; the reflection suite opts in.
   reflect: { enabled: false, ...(overrides.reflect || {}) },
+  // Final report synthesis is covered explicitly; most loop tests inspect
+  // planner prompts and should not add a trailing no-tools report call.
+  report: { enabled: false, ...(overrides.report || {}) },
 });
 
 // ─── suites ──────────────────────────────────────────────────────────────────
@@ -627,6 +632,20 @@ async function validateSuite() {
     }
   });
 
+  await test('requires a non-empty intent under 15 words', () => {
+    const lookup = { '@e1': 111 };
+    const cases = [
+      [action('click', { ref: '@e1', args: { intent: undefined } }), /missing required arg "intent"/],
+      [action('click', { ref: '@e1', args: { intent: '   ' } }), /must not be empty/],
+      [action('click', { ref: '@e1', args: { intent: 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen' } }), /under 15 words/],
+    ];
+    for (const [act, re] of cases) {
+      const { ok, errors } = validate([act], lookup, registry);
+      assert.strictEqual(ok.length, 0);
+      assert.match(errors[0].error, re);
+    }
+  });
+
   await test('tolerates extra args', () => {
     const { ok } = validate([action('press', { args: { key: 'Enter', bogus: 1 } })], {}, registry);
     assert.strictEqual(ok.length, 1);
@@ -1066,6 +1085,7 @@ async function scratchpadSuite() {
       assert.strictEqual(scratch.saveImage({ base64: Buffer.from('x').toString('base64') }), null);
       assert.strictEqual(scratch.writeReport('report'), null);
       assert.strictEqual(scratch.readMarkdown(), '');
+      assert.strictEqual(scratch.readIndex(), '');
       assert.deepStrictEqual(fs.readdirSync(dir), []);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1079,14 +1099,45 @@ async function scratchpadSuite() {
       const text = scratch.saveText({ content: 'Full captured text', summary: 'Captured note', url: 'https://example.test/a' });
       const image = scratch.saveImage({ base64: Buffer.from('png bytes').toString('base64'), title: 'Shot' });
       const md = scratch.readMarkdown();
+      const index = scratch.readIndex();
 
       assert.strictEqual(text.path, scratch.savedPath);
       assert.strictEqual(fs.readFileSync(image.path, 'utf8'), 'png bytes');
       assert.ok(md.includes('### Captured note'));
       assert.ok(md.includes('- Image: assets/screenshot-1.png'));
       assert.ok(md.includes('![screenshot-1.png](assets/screenshot-1.png)'));
+      assert.ok(!md.includes('- Record:'), 'raw saved.md omits record ids');
+      assert.ok(!md.includes('- Saved:'), 'raw saved.md omits timestamps');
+      assert.ok(index.includes('### Captured note'));
+      assert.ok(index.includes('- Type: text'));
+      assert.ok(index.includes('- URL: https://example.test/a'));
+      assert.ok(index.includes('### Shot'));
+      assert.ok(index.includes('- Image: [assets/screenshot-1.png](assets/screenshot-1.png)'));
+      assert.ok(!index.includes('- Saved:'), 'saved-index.md omits timestamps');
+      assert.strictEqual(scratch.saveCount, 2);
       assert.strictEqual(scratch.textCount, 1);
       assert.strictEqual(scratch.imageCount, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('saved text, images, and files include optional reason metadata', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      scratch.saveText({ content: 'Fact', summary: 'Fact saved', reason: 'preserve fact before navigating' });
+      scratch.saveImage({ base64: Buffer.from('png').toString('base64'), reason: 'read chart labels' });
+      scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('pdf').toString('base64'), reason: 'keep source document' });
+      const md = scratch.readMarkdown();
+      const index = scratch.readIndex();
+
+      assert.ok(md.includes('- Reason: preserve fact before navigating'));
+      assert.ok(md.includes('- Reason: read chart labels'));
+      assert.ok(md.includes('- Reason: keep source document'));
+      assert.ok(index.includes('- Reason: preserve fact before navigating'));
+      assert.ok(index.includes('- Reason: read chart labels'));
+      assert.ok(index.includes('- Reason: keep source document'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1111,6 +1162,23 @@ async function scratchpadSuite() {
     }
   });
 
+  await test('saved-index.md keeps summaries to 30 words', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const summary = Array.from({ length: 35 }, (_, i) => `word${i + 1}`).join(' ');
+      scratch.saveText({ content: 'Full raw text', summary });
+
+      const line = scratch.readIndex().split('\n').find(l => l.startsWith('- Summary: '));
+      const words = line.replace('- Summary: ', '').split(/\s+/).filter(Boolean);
+      assert.strictEqual(words.length, 30);
+      assert.strictEqual(words[0], 'word1');
+      assert.strictEqual(words[29], 'word30');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   await test('filenameStemFromHint makes durable language slugs', () => {
     assert.strictEqual(filenameStemFromHint('Read the chart labels & values!'), 'read-the-chart-labels-and-values');
     assert.strictEqual(filenameStemFromHint('  Résumé / Q2 – totals  '), 'resume-q2-totals');
@@ -1128,6 +1196,7 @@ async function scratchpadSuite() {
         ext: 'jpg',
       });
 
+      assert.ok(scratch.readMarkdown().includes('### Read chart labels screenshot'));
       assert.strictEqual(image.name, 'read-chart-labels-screenshot-7.jpg');
       assert.ok(scratch.readMarkdown().includes('- Image: assets/read-chart-labels-screenshot-7.jpg'));
     } finally {
@@ -1139,23 +1208,29 @@ async function scratchpadSuite() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
+      const markdown = '# Report\n\nhttps://example.test/a?x=1&y=2';
       assert.ok(fs.existsSync(scratch.dir), 'run directory exists at init');
-      assert.strictEqual(scratch.writeReport('# Report'), scratch.reportPath);
-      assert.strictEqual(fs.readFileSync(scratch.reportPath, 'utf8'), '# Report');
+      assert.strictEqual(scratch.writeReport(markdown), scratch.reportPath);
+      assert.strictEqual(fs.readFileSync(scratch.reportPath, 'utf8'), markdown);
+      const html = fs.readFileSync(scratch.reportHtmlPath, 'utf8');
+      assert.ok(html.includes('<h1>Report</h1>'));
+      assert.ok(html.includes('href="https://example.test/a?x=1&amp;y=2"'));
+      assert.ok(html.includes('target="_blank"'));
+      assert.ok(html.includes('rel="noopener noreferrer"'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  await test('saveAsset suffixes colliding sanitized filenames', () => {
+  await test('saveAsset uses durable file slugs and suffixes collisions', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
       const first = scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('first').toString('base64'), summary: 'first' });
       const second = scratch.saveAsset({ filename: 'report.pdf', base64: Buffer.from('second').toString('base64'), summary: 'second' });
 
-      assert.strictEqual(first.name, 'report.pdf');
-      assert.strictEqual(second.name, 'report-2.pdf');
+      assert.strictEqual(first.name, 'report-file-1.pdf');
+      assert.strictEqual(second.name, 'report-file-2.pdf');
       assert.strictEqual(fs.readFileSync(first.path, 'utf8'), 'first');
       assert.strictEqual(fs.readFileSync(second.path, 'utf8'), 'second');
     } finally {
@@ -1163,7 +1238,7 @@ async function scratchpadSuite() {
     }
   });
 
-  await test('hinted assets keep original extension and supplied id', () => {
+  await test('hinted assets use screenshot-like naming with original extension and supplied id', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
@@ -1174,9 +1249,9 @@ async function scratchpadSuite() {
         id: 12,
       });
 
-      assert.strictEqual(file.name, 'quarterly-revenue-report-12.pdf');
-      assert.ok(scratch.readMarkdown().includes('- File: assets/quarterly-revenue-report-12.pdf'));
-      assert.ok(scratch.readMarkdown().includes('- Link: [quarterly-revenue-report-12.pdf](assets/quarterly-revenue-report-12.pdf)'));
+      assert.strictEqual(file.name, 'quarterly-revenue-report-file-12.pdf');
+      assert.ok(scratch.readMarkdown().includes('- File: assets/quarterly-revenue-report-file-12.pdf'));
+      assert.ok(scratch.readMarkdown().includes('- Link: [quarterly-revenue-report-file-12.pdf](assets/quarterly-revenue-report-file-12.pdf)'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1210,6 +1285,61 @@ async function logSuite() {
   });
 }
 
+async function agentCliSuite() {
+  console.log('\nagent cli:');
+
+  await test('buildHandoff returns the compact stdout contract with absolute paths', () => {
+    const runArtifact = {
+      id: 'run-1',
+      task: 'Collect listings',
+      status: 'completed',
+      result: 'ok',
+      report: '# Report',
+      reportEvidence: { source: 'saved-index.md', rawTokens: 4500, rawTokenBudget: 3000 },
+      artifacts: {
+        runDir: '/tmp/runs/run-1',
+        reportPath: '/tmp/runs/run-1/report.md',
+        reportHtmlPath: '/tmp/runs/run-1/report.html',
+        savedPath: '/tmp/runs/run-1/saved.md',
+        savedIndexPath: '/tmp/runs/run-1/saved-index.md',
+        assetsDir: '/tmp/runs/run-1/assets',
+        logPath: '/tmp/logs/latest.json',
+        jsonlPath: '/tmp/logs/latest.jsonl',
+      },
+      stats: {
+        stepCount: 12,
+        totalElapsedMs: 3456,
+        totalInputTokens: 100,
+        totalOutputTokens: 50,
+        totalEstimatedPromptTokens: 500,
+      },
+    };
+
+    const out = buildHandoff(runArtifact, { context: '  prefer concise summaries  ' });
+    assert.strictEqual(out.ok, true);
+    assert.strictEqual(out.status, 'completed');
+    assert.strictEqual(out.runId, 'run-1');
+    assert.strictEqual(out.context, 'prefer concise summaries');
+    assert.strictEqual(out.report.markdown, '# Report');
+    assert.strictEqual(out.report.path, '/tmp/runs/run-1/report.md');
+    assert.strictEqual(out.report.htmlPath, '/tmp/runs/run-1/report.html');
+    assert.strictEqual(out.report.evidenceSource, 'saved-index.md');
+    assert.strictEqual(out.artifacts.saved, '/tmp/runs/run-1/saved.md');
+    assert.strictEqual(out.artifacts.savedIndex, '/tmp/runs/run-1/saved-index.md');
+    assert.strictEqual(out.artifacts.assetsDir, '/tmp/runs/run-1/assets');
+    assert.strictEqual(out.artifacts.log, '/tmp/logs/latest.json');
+    assert.strictEqual(out.artifacts.jsonl, '/tmp/logs/latest.jsonl');
+    assert.deepStrictEqual(out.stats, {
+      steps: 12,
+      elapsedMs: 3456,
+      inputTokens: 100,
+      outputTokens: 50,
+      estimatedPromptTokens: 500,
+    });
+    assert.strictEqual(out.error, null);
+  });
+}
+
 async function promptSuite() {
   console.log('\nprompt:');
 
@@ -1223,10 +1353,10 @@ async function promptSuite() {
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
-    assert.ok(prompt.includes('type[@e] (intent: string?, text: string, clear: boolean?, submit: boolean?)'), 'required + optional args should be shown');
-    assert.ok(prompt.includes('wait (intent: string?, ms: number)'), 'wait args should be shown');
-    assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, intent: string?, hint: string?)'), 'optional ref types should be shown');
-    assert.ok(prompt.includes('done (intent: string?, result: string?)'), 'optional args should be marked');
+    assert.ok(prompt.includes('type[@e] (intent: string, text: string, clear: boolean?, submit: boolean?)'), 'required + optional args should be shown');
+    assert.ok(prompt.includes('wait (intent: string, ms: number)'), 'wait args should be shown');
+    assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, intent: string, hint: string?)'), 'optional ref types should be shown');
+    assert.ok(prompt.includes('done (intent: string, result: string?)'), 'optional args should be marked');
     assert.ok(prompt.includes('describing where this'), 'intent rule should be explicit');
     assert.ok(prompt.includes('never pass punctuation, CSS selectors, words, or coordinates as ref'), 'screenshot refs should be hardened');
     assert.ok(prompt.includes('Do not save intermediate report drafts'), 'operating rules should discourage draft-saving');
@@ -1670,39 +1800,77 @@ async function loopSuite() {
         config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
       });
       const reportPath = path.join(dir, r.id, 'report.md');
+      const htmlPath = path.join(dir, r.id, 'report.html');
       assert.strictEqual(r.status, 'completed', r.error);
       assert.ok(fs.existsSync(reportPath), 'report.md exists even with no saves');
-      assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Scratchpad\n\n_(nothing saved)_'));
+      assert.ok(fs.existsSync(htmlPath), 'report.html exists even with no saves');
+      assert.ok(fs.readFileSync(reportPath, 'utf8').includes('## Saved Evidence\n\n_(nothing saved)_'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  await test('report.md cleans navigate action URLs', async () => {
-    installFakeProvider([
-      [action('navigate', { args: { url: 'https://example.test/path?q=keep&utm_source=nope&fbclid=abc#frag' } })],
+  await test('final report synthesis writes model-organized report.md', async () => {
+    const reqs = installFakeProvider([
+      [action('save_text', { args: { content: 'Alpha finding', summary: 'Alpha saved' } })],
       [action('done', { args: { result: 'ok' } })],
-    ]);
+    ], ['# Final Report\n\n- Organized Alpha finding']);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
     try {
       const r = await run({
         session: makeFakeSession([makeBrief, makeBrief]),
-        task: 'navigate cleanly',
-        config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
+        task: 'organize findings',
+        config: {
+          ...baseConfig({
+            context: 'Prefer concise user-facing reports.',
+            report: { enabled: true, provider: 'fake', model: 'report-model' },
+          }),
+          scratchpad: { enabled: true, dir },
+        },
       });
       const report = fs.readFileSync(path.join(dir, r.id, 'report.md'), 'utf8');
 
       assert.strictEqual(r.status, 'completed', r.error);
-      assert.match(report, /navigate\*\* → https:\/\/example\.test\/path\?q=keep/);
-      assert.ok(!report.includes('utm_source'), 'tracking param should be dropped');
-      assert.ok(!report.includes('fbclid'), 'click id should be dropped');
-      assert.ok(!report.includes('#frag'), 'fragment should be dropped');
+      assert.strictEqual(report, '# Final Report\n\n- Organized Alpha finding');
+      assert.ok(r.completions.some(c => c.model === 'fake-1'), 'report completion is recorded');
+      assert.ok(reqs[2].messages[0].content.includes('Evidence source: saved.md'));
+      assert.ok(reqs[2].messages[0].content.includes('Trusted context:\nPrefer concise user-facing reports.'));
+      assert.ok(reqs[2].messages[0].content.includes('Alpha finding'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  await test('finished run folds saved.md into report.md and keeps saved.md', async () => {
+  await test('final report synthesis uses saved-index.md when raw saves exceed budget', async () => {
+    const raw = 'RAW_DETAIL '.repeat(200).trim();
+    const reqs = installFakeProvider([
+      [action('save_text', { args: { content: raw, summary: 'Alpha indexed finding' } })],
+      [action('done', { args: { result: 'ok' } })],
+    ], ['# Summary Report\n\n- Indexed Alpha']);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
+    try {
+      const r = await run({
+        session: makeFakeSession([makeBrief, makeBrief]),
+        task: 'summarize large search',
+        config: { ...baseConfig({ report: { enabled: true, provider: 'fake', model: 'report-model', rawTokenBudget: 10 } }), scratchpad: { enabled: true, dir } },
+      });
+      const report = fs.readFileSync(path.join(dir, r.id, 'report.md'), 'utf8');
+      const reportPrompt = reqs[2].messages[0].content;
+
+      assert.strictEqual(r.status, 'completed', r.error);
+      assert.strictEqual(report, '# Summary Report\n\n- Indexed Alpha');
+      assert.strictEqual(r.reportEvidence.source, 'saved-index.md');
+      assert.ok(fs.existsSync(path.join(dir, r.id, 'saved-index.md')), 'saved-index.md exists');
+      assert.ok(reportPrompt.includes('Evidence source: saved-index.md'));
+      assert.ok(reportPrompt.includes('Evidence mode: summary-index'));
+      assert.ok(reportPrompt.includes('Alpha indexed finding'));
+      assert.ok(!reportPrompt.includes('RAW_DETAIL'), 'raw saved.md content should stay out of report prompt');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('fallback report includes saved.md content and keeps saved.md', async () => {
     installFakeProvider([
       [action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } })],
       [action('done', { args: { result: 'ok' } })],
@@ -1721,6 +1889,7 @@ async function loopSuite() {
 
       assert.strictEqual(r.status, 'completed', r.error);
       assert.ok(report.includes('Full captured finding'), 'report includes saved.md content');
+      assert.ok(report.includes('Final report synthesis disabled'), 'report records fallback reason');
       assert.ok(fs.existsSync(savedPath), 'saved.md remains after final report is written');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -2010,11 +2179,11 @@ async function memorySuite() {
     assert.match(reqs[1].messages[0].content, /intent: test search input/);
   });
 
-  await test('prompt carries full intent history without truncating older intents', async () => {
-    const longIntent = 'collect the current result title, preserve the exact wording, then move to the next candidate only after the page responds';
-    const secondIntent = 'open the next candidate from the visible result list';
+  await test('prompt carries bounded intent history without truncating older intents', async () => {
+    const firstIntent = 'collect exact title then inspect next candidate';
+    const secondIntent = 'open next visible candidate';
     const reqs = installFakeProvider([
-      [action('click', { ref: '@e1', args: { intent: longIntent } })],
+      [action('click', { ref: '@e1', args: { intent: firstIntent } })],
       [action('scroll', { args: { direction: 'down', intent: secondIntent } })],
       [action('done', { args: {} })],
     ]);
@@ -2023,9 +2192,8 @@ async function memorySuite() {
     assert.strictEqual(r.status, 'completed', r.error);
 
     const t3 = reqs[2].messages[0].content;
-    assert.match(t3, /1\. clicked "Search" — intent: collect the current result title, preserve the exact wording, then move to the next candidate only after the page responds/);
-    assert.match(t3, /2\. scrolled down — intent: open the next candidate from the visible result list/);
-    assert.ok(!t3.includes('after the page...'), 'intent should not be word-truncated');
+    assert.match(t3, /1\. clicked "Search" — intent: collect exact title then inspect next candidate/);
+    assert.match(t3, /2\. scrolled down — intent: open next visible candidate/);
   });
 
   await test('history uses cleaned navigate URLs and readable select_text targets', async () => {
@@ -2146,7 +2314,7 @@ async function memorySuite() {
     const r = await run({ session, task: 'x', config: baseConfig() });
     assert.strictEqual(r.status, 'completed', r.error);
     const t2 = reqs[1].messages[0].content;
-    assert.match(t2, /waited — rejected: missing required arg "ms"/);
+    assert.match(t2, /waited — intent: test intent — rejected: missing required arg "ms"/);
     assert.ok(!t2.includes('waited ms'), 'should not render awkward missing-ms wording');
   });
 }
@@ -2166,9 +2334,9 @@ async function providerTranslationSuite() {
 
   await test('toolsFromRegistry exposes optional screenshot ref', () => {
     const [tool] = planMod.toolsFromRegistry({ take_screenshot: registry.take_screenshot });
-    assert.deepStrictEqual(tool.inputSchema, { ref: 'string?', intent: 'string?', hint: 'string?' });
+    assert.deepStrictEqual(tool.inputSchema, { ref: 'string?', intent: 'string', hint: 'string?' });
     const schema = buildJsonSchema(tool.inputSchema);
-    assert.deepStrictEqual(schema.required, []);
+    assert.deepStrictEqual(schema.required, ['intent']);
     assert.strictEqual(schema.properties.ref.type, 'string');
     assert.strictEqual(schema.properties.intent.type, 'string');
   });
@@ -2541,6 +2709,7 @@ async function postJSONSuite() {
   await scratchpadSuite();
   await saveFileSuite();
   await logSuite();
+  await agentCliSuite();
   await promptSuite();
   await tokenSuite();
   await textSuite();

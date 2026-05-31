@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 // Single entry point. Runs preflight (deps, driver, Accessibility, creds,
 // Chrome), then an agent loop against the current tab, and prints the Run
@@ -116,6 +116,48 @@ function validateConfig(config) {
   posInt(config.loop?.maxEmptyPlans, 'loop.maxEmptyPlans');
 }
 
+function buildHandoff(runArtifact, config = {}) {
+  const artifacts = runArtifact.artifacts || {};
+  const context = typeof config.context === 'string' && config.context.trim()
+    ? config.context.trim()
+    : null;
+  const error = runArtifact.error
+    ? { message: runArtifact.error, type: runArtifact.errorType || null }
+    : null;
+  return {
+    ok: runArtifact.status === 'completed',
+    status: runArtifact.status,
+    runId: runArtifact.id,
+    task: runArtifact.task,
+    context,
+    result: runArtifact.result ?? null,
+    report: {
+      markdown: runArtifact.report ?? null,
+      path: artifacts.reportPath || null,
+      htmlPath: artifacts.reportHtmlPath || null,
+      evidenceSource: runArtifact.reportEvidence?.source || null,
+      rawTokens: runArtifact.reportEvidence?.rawTokens ?? null,
+      rawTokenBudget: runArtifact.reportEvidence?.rawTokenBudget ?? null,
+    },
+    artifacts: {
+      runDir: artifacts.runDir || null,
+      saved: artifacts.savedPath || null,
+      savedIndex: artifacts.savedIndexPath || null,
+      assetsDir: artifacts.assetsDir || null,
+      log: artifacts.logPath || null,
+      jsonl: artifacts.jsonlPath || null,
+    },
+    stats: {
+      steps: runArtifact.stats?.stepCount ?? 0,
+      elapsedMs: runArtifact.stats?.totalElapsedMs ?? 0,
+      inputTokens: runArtifact.stats?.totalInputTokens ?? 0,
+      outputTokens: runArtifact.stats?.totalOutputTokens ?? 0,
+      estimatedPromptTokens: runArtifact.stats?.totalEstimatedPromptTokens ?? 0,
+    },
+    error,
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.task) {
@@ -151,14 +193,18 @@ async function main() {
   try {
     session = await connect({ port });
     const runArtifact = await run({ session, task: args.task, config });
-    process.stdout.write((runArtifact.report || JSON.stringify(runArtifact, null, 2)) + '\n');
+    process.stdout.write(JSON.stringify(buildHandoff(runArtifact, config)) + '\n');
     process.exitCode = runArtifact.status === 'completed' ? 0 : 1;
   } finally {
     if (session) await session.close();
   }
 }
 
-main().catch(err => {
-  console.error('fatal:', err?.message || err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('fatal:', err?.message || err);
+    process.exit(1);
+  });
+}
+
+module.exports = { buildHandoff, parseArgs };

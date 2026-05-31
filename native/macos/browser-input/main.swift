@@ -347,6 +347,12 @@ func postKey(_ keyName: String, modifiers: [String]) -> String? {
 // AppKit text views and Chrome's renderer both accept it as a "typed"
 // character with timing indistinguishable from a real keystroke.
 func typeText(_ text: String, delayMsMin: Int, delayMsMax: Int) {
+    // Settle before the first keystroke. The preceding focus-click and Cmd+A
+    // select-all need a beat to commit in Chrome and to release the Command
+    // modifier; posting the first char too soon makes it land as a Cmd-chord (or
+    // before focus is committed) and get dropped. The inter-keystroke delay below
+    // only runs *after* each char, so the first one has no cushion without this.
+    usleep(useconds_t(50 * 1000))
     for ch in text {
         let s = String(ch)
         let utf16 = Array(s.utf16)

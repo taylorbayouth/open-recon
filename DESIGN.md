@@ -242,7 +242,7 @@ Rules:
 | `take_screenshot` | Capture the viewport, save it, and have a vision model describe it | Top-level, `changesPage:false`, `idempotentRead`. For visual content the text listing can't convey (image CAPTCHAs, charts, canvas) or "take a screenshot" tasks. Optional `hint` focuses the description. Backend-agnostic (CDP `Page.captureScreenshot`). PNG → `runs/<id>/assets/`; saved path + description ride back as Observation detail into the event log. See `lib/vision.js` + `vision` config. |
 | `get_images` | List the page's images (URL, name, size, position) | Top-level, `changesPage:false`, `idempotentRead`. Images aren't in the perception listing; this scans for them on demand via `lib/media.js` (DOM reads only — `DOM.querySelectorAll`/`getAttributes`/`getBoxModel`, no page JS). The compact list rides back as Observation detail; the model passes a chosen URL to `save_file`. |
 | `get_files` | List downloadable file links (PDFs, docs, archives) | Top-level, `changesPage:false`, `idempotentRead`. Same scanner as `get_images`, filtered to `<a href>`/`<embed>`/`<object>`/`<iframe>` whose target looks like a file (extension or `download` attr). |
-| `save_text` | Save model-authored text to the run | Top-level, `changesPage:false`. Loop-level (special-cased in `execute.js`, no backend, no extra LLM call). `content` → `runs/<id>/assets/note-N.txt`; only the model's `summary` re-enters the event log. |
+| `save_text` | Save model-authored text to the run | Top-level, `changesPage:false`. Loop-level (special-cased in `execute.js`, no backend, no extra LLM call). `content` is appended to `runs/<id>/saved.md`; a 30-word row is appended to `saved-index.md`; only the model's `summary` re-enters the event log. |
 | `save_file` | Download the bytes at a URL and save them | Top-level, `changesPage:false`. URL typically from `get_images`/`get_files`. Download is no-page-JS: `data:` decode → `Page.getResourceContent` (cached, exact, no CSP) → `Network.loadNetworkResource` (cold, CSP-limited). Image → vision summary; else metadata. Bytes → `assets/`; summary re-enters the event log. See `lib/savefile.js`. |
 | `wait` | Sleep for `ms` milliseconds | For *deliberate* pauses only; `ms` is capped at 30000. Universal settle still runs after every verb — `wait` is not the settle mechanism. |
 | `done` | Signal task completion | Loop captures the optional `result` string and exits with status `completed`. |
@@ -250,6 +250,12 @@ Rules:
 ### `done` semantics
 
 The LLM marks task completion by emitting `{ verb: "done", args: { result: "…" } }`. Loop captures the result and exits without re-snapshotting. `done` does *not* count toward step budget exhaustion (it always terminates cleanly).
+
+### Final report
+
+At finish, the loop reads `runs/<id>/saved.md` if it fits `report.rawTokenBudget`; otherwise it reads `saved-index.md`. It hands that evidence, the original task, and optional trusted `context` to one no-tools report model call. That model writes `report.md` for the original task, so organization can vary with the assignment instead of being locked to a code template. The prompt tells it to preserve source URLs and relative `assets/` links, use only saved evidence, and call out gaps instead of inventing missing facts.
+
+When `saved-index.md` is used, `report.md` becomes summary-oriented rather than comprehensive; raw details remain in `saved.md`. If `report.enabled` is `false`, the report model is unavailable, or it returns no text, the loop writes a compact deterministic fallback report from the same selected evidence. `saved.md` and `saved-index.md` remain on disk either way. The same Markdown is also rendered to `report.html` with a small built-in renderer; plain URLs and Markdown links open in a new window, and no external Markdown dependency is required.
 
 ---
 
@@ -374,8 +380,20 @@ DEFAULTS (lib/config.js)  <  browser-agent.config.json  <  env vars  <  CLI flag
 | `vision.model` | `null` | `null` → a multimodal default for the chosen provider. |
 | `vision.prompt` | `"Describe what you see…"` | Static base prompt sent with the image; a per-call `hint` is appended. |
 | `vision.maxTokens` | `1024` | Output cap for the vision call. |
+| `report.enabled` | `true` | Run one final no-tools LLM call that turns saved evidence into task-specific `report.md`. |
+| `report.provider` | `openai` | Provider for final report synthesis. |
+| `report.model` | `gpt-5.5` | Model for final report synthesis. |
+| `report.rawTokenBudget` | `3000` | Use raw `saved.md` below this estimate; use `saved-index.md` above it. |
 | `log.enabled` | `true` | Write per-run JSONL and latest run artifacts. |
 | `log.dir` | `logs` | Directory for run logs, resolved relative to the current working directory. |
+
+---
+
+## CLI output contract
+
+`node agent.js` is designed for another process to call. Progress, preflight guidance, and turn status are written to stderr. Stdout is exactly one compact JSON object with `ok`, `status`, `runId`, `task`, optional trusted `context`, `result`, final report content, and absolute paths to `report.md`, `report.html`, `saved.md`, `saved-index.md`, `assets/`, and the run logs. Callers should parse stdout and use the paths directly instead of reconstructing run locations from cwd.
+
+Exit codes are: `0` for `completed`, `1` for a run that executed but ended incomplete/failed, and `2` for usage/config/preflight errors.
 
 ---
 
@@ -455,10 +473,10 @@ Each Plan call is therefore just `{ system, tools, messages: [ <one user message
 
 - **Linear, not quadratic.** Only the current page is ever shown in full; old snapshots collapse to one event line each. The system prompt + tool defs remain the stable, cacheable prefix.
 - **Provider-agnostic with no pairing.** Because no `tool_use`/`tool_result` blocks are replayed, there is no `tool_use_id` to thread and no role-alternation constraint — every provider gets a single user turn.
-- **Derived, not summarized by a model.** The log comes straight from the Steps the loop already records (`describeAction` resolves a ref to its element name) plus URL deltas, so it costs no extra LLM call and can't hallucinate state.
-- **Intent breadcrumbs.** Each tool schema includes optional `intent` metadata. The system prompt requires it to stay under 15 words, and the loop logs it next to the action so the next turn knows why the agent is on the current page without adding another LLM call.
+- **Derived, not summarized by a model.** The turn log comes straight from the Steps the loop already records (`describeAction` resolves a ref to its element name) plus URL deltas, so it costs no extra LLM call and can't hallucinate state.
+- **Intent breadcrumbs.** Each tool schema requires `intent` metadata. The validator requires it to be non-empty and under 15 words, and the loop logs it next to the action so the next turn knows why the agent is on the current page without adding another LLM call.
 
-The known limitation: an event log captures actions, navigations, and errors, but not arbitrary page text that appeared and then vanished. A future `note`/`extract` verb would let the model deliberately persist a fact into the log.
+The known limitation: an event log captures actions, navigations, and errors, but not arbitrary page text that appeared and then vanished. The model must call `save_text` to preserve raw text evidence in `saved.md` and a compact row in `saved-index.md` for the final report.
 
 ### Failure handling
 
@@ -482,7 +500,7 @@ The stuck/empty-plan aborts above are blunt: a flailing agent is killed rather t
 
 - **Loop-triggered, not a verb.** The model deepest in a loop is the least likely to ask for a pause, so the loop fires it on the signals it already computes; it is not in the action registry.
 - **Its own model.** `reflect.provider`/`reflect.model` are independent of the planner (default `gpt-5.5`), so a cheap planner can pause to think on a stronger model. `null` falls back to the planner's provider/model.
-- **Persisted as an event.** The decision line is pushed into the event log as a permanent step, so every subsequent turn reads the pivot. The long-form reasoning is *not* requested (fewer output tokens), and because the report is built from `Steps` (not the event log), reflections never leak into the deliverable.
+- **Persisted as an event.** The decision line is pushed into the event log as a permanent step, so every subsequent turn reads the pivot. The long-form reasoning is *not* requested (fewer output tokens). The final report is synthesized from `saved.md` or `saved-index.md`, not the event log, so reflection decisions do not leak into the deliverable unless the agent explicitly saved them as evidence.
 - **Bounded.** Capped at `reflect.maxReflections` per run with a `reflect.cooldownTurns` gap, so it can't reflect itself to death. A reflection turn is refunded from `maxSteps` (`iter--`) — it doesn't cost the agent working budget — but still counts toward the absolute `maxIterations` ceiling.
 - **Clean re-entry.** On firing it clears the flailing guards and `lastHash`, forcing a fresh extract so the pivot acts on a real page. If reflection is unavailable (disabled, capped, or in cooldown), the original abort proceeds as before.
 - **Scratchpad clipping.** `clipSaved` keeps every `###` heading (so an early finding never disappears) and tail-trims only the body to `reflect.savedMaxChars` — recency-truncation alone would drop the earliest, often most important, findings.
