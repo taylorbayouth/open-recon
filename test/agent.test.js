@@ -1767,39 +1767,6 @@ async function reflectSuite() {
   });
 }
 
-async function linkPatchSuite() {
-  console.log('\nlink targeting (collapse new tabs):');
-  const { Session } = require('../lib/connect');
-  const mkClient = (calls) => ({
-    Accessibility: { enable: async () => {} },
-    Page: {
-      enable: async () => {},
-      addScriptToEvaluateOnNewDocument: async (a) => { calls.push(['addScript', a.source]); },
-    },
-    Runtime: { evaluate: async (a) => { calls.push(['eval', a.expression]); } },
-  });
-
-  await test('installs a capture-phase target→_self patch when collapseNewTabs is on', async () => {
-    const calls = [];
-    const s = new Session(mkClient(calls), { id: 'T' }, { collapseNewTabs: true });
-    await s._ensureLinkTargetingPatch();
-    await s._ensureLinkTargetingPatch();  // must be idempotent per client
-    const added = calls.filter(c => c[0] === 'addScript');
-    assert.strictEqual(added.length, 1, 'armed future docs exactly once');
-    assert.match(added[0][1], /addEventListener\('click'/);
-    assert.match(added[0][1], /, true\)/);   // capture phase
-    assert.match(added[0][1], /_self/);      // rewrites the target
-    assert.ok(calls.some(c => c[0] === 'eval'), 'also patches the already-loaded document');
-  });
-
-  await test('does nothing when collapseNewTabs is off', async () => {
-    const calls = [];
-    const s = new Session(mkClient(calls), { id: 'T' }, {});
-    await s._ensureLinkTargetingPatch();
-    assert.strictEqual(calls.length, 0);
-  });
-}
-
 async function backSuite() {
   console.log('\nback + history:');
   const cdp = require('../lib/executors/cdp');
@@ -1826,9 +1793,31 @@ async function backSuite() {
     assert.strictEqual(toEntry, 11);  // entries[currentIndex - 1]
   });
 
-  await test('back throws (non-fatal) when there is no previous page', async () => {
+  await test('back throws (non-fatal) when there is no previous page and no other tabs', async () => {
     const session = { client: historyClient({ currentIndex: 0, entries: [{ id: 10 }] }) };
     await assert.rejects(() => back({ session }), /no previous page/);
+  });
+
+  await test('back closes the tab and follows when no history but other tabs exist', async () => {
+    let closedId = null;
+    let followed = false;
+    const session = {
+      client: {
+        ...historyClient({ currentIndex: 0, entries: [{ id: 10 }] }),
+        Target: {
+          getTargets: async () => ({ targetInfos: [
+            { type: 'page', targetId: 'tab-A' },
+            { type: 'page', targetId: 'tab-B' },
+          ]}),
+          closeTarget: async ({ targetId }) => { closedId = targetId; },
+        },
+      },
+      _target: { id: 'tab-A' },
+      followActiveTab: async () => { followed = true; },
+    };
+    await back({ session });   // must not throw
+    assert.strictEqual(closedId, 'tab-A', 'closed the no-history tab');
+    assert.ok(followed, 'followActiveTab called to re-pin the session');
   });
 
   await test('back validates with no ref or args', () => {
@@ -2410,7 +2399,6 @@ async function postJSONSuite() {
   await loopSuite();
   await reflectSuite();
   await backSuite();
-  await linkPatchSuite();
   await memorySuite();
   await providerTranslationSuite();
   await geminiSuite();

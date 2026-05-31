@@ -305,7 +305,11 @@ On macOS, `pageToScreen` first asks the native helper for the frontmost Chrome `
 
 ### Tab following (multi-tab / popups)
 
-A click that opens a popup or new tab (OAuth/sign-in flows do this constantly) leaves the CDP session pinned to the original tab. `Session.followActiveTab` (run before each snapshot) re-pins to where the action landed, reading CDP's target graph rather than guessing from OS window focus. The pure policy `chooseTab` decides: follow a popup our tab opened (`openerId` — which `window.open` popups always keep, since they `postMessage` results back to the opener); else a brand-new target that appeared since the last poll; and when our tab closes, return to its opener (the OAuth round-trip). Deterministic and cross-platform. Per-element interaction *inside* a cross-origin (OOPIF) tab still needs multi-target stitching and is out of scope.
+A click that opens a new tab or popup leaves the CDP session pinned to the original tab. `Session.followActiveTab` (run before each snapshot) re-pins to where the action landed, reading CDP's target graph rather than guessing from OS window focus. The pure policy `chooseTab` decides: follow a child our tab opened (`openerId` — `window.open` tabs always keep it, since the child may need to communicate back to its opener); else a brand-new target that appeared since the last poll; and when our tab closes, return to its opener if still around, else the newest page. Deterministic and cross-platform.
+
+**`back()` and new tabs:** a tab opened by the browser (`target=_blank`) starts with no history. When `back()` is called with no history and other page tabs are open, the current tab is closed and `followActiveTab` re-pins the session to the opener or newest remaining tab — the same recovery the session would do naturally when a tab closes. `back()` only throws (non-fatal) when the tab has no history *and* is the only tab open.
+
+Per-element interaction *inside* a cross-origin (OOPIF) tab still needs multi-target stitching and is out of scope.
 
 This avoids a hand-tuned constant for Chrome's chrome — the offset is recomputed every dispatch, so it's robust to user toggling the bookmarks bar or zoom.
 

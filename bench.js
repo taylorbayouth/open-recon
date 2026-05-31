@@ -121,7 +121,7 @@ async function main() {
 
   let session;
   try {
-    session = await connect({ port: 9222, collapseNewTabs: config.collapseNewTabs });
+    session = await connect({ port: 9222 });
   } catch (err) {
     console.error(`Cannot connect to Chrome on :9222. Start Chrome first:\n  npm run launch\nError: ${err.message}`);
     process.exit(1);
