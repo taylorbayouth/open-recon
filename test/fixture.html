@@ -86,7 +86,8 @@
         <input id="email" type="email" placeholder="you@example.com">
 
         <label for="password">Password</label>
-        <input id="password" type="password">
+        <!-- prefilled so the password-redaction path has a value to scrub -->
+        <input id="password" type="password" value="s3cr3t-pw">
 
         <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;">
           <input type="checkbox" id="remember"> Remember me
@@ -117,7 +118,7 @@
       </fieldset>
       <div style="display:flex;gap:10px;margin-top:12px;">
         <button type="button" disabled>Locked action</button>
-        <button type="button">Open dialog</button>
+        <button type="button" aria-haspopup="dialog">Open dialog</button>
       </div>
     </section>
 

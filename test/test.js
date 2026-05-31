@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const CDP = require('chrome-remote-interface');
 
-const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, isInvalid, bboxArr } = require('../lib/extract');
+const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, isInvalid, popupKind, safeValue, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect, chooseTab } = require('../lib/connect');
 
@@ -202,6 +202,24 @@ test('isInvalid: only non-"false" AX tokens count as invalid', () => {
   assert.strictEqual(isInvalid(false), false);
   assert.strictEqual(isInvalid(null), false);
   assert.strictEqual(isInvalid(undefined), false);
+});
+
+test('popupKind: only a non-"false" token signals a popup', () => {
+  // Same token shape as `invalid`: the no-popup value is the truthy string "false".
+  assert.strictEqual(popupKind('menu'), 'menu');
+  assert.strictEqual(popupKind('dialog'), 'dialog');
+  assert.strictEqual(popupKind(true), 'true');
+  assert.strictEqual(popupKind('false'), null, '"false" string opens nothing');
+  assert.strictEqual(popupKind(false), null);
+  assert.strictEqual(popupKind(null), null);
+  assert.strictEqual(popupKind(undefined), null);
+});
+
+test('safeValue: redacts password values, passes everything else through', () => {
+  assert.strictEqual(safeValue({ value: { value: 'hunter2' } }, true), '••••••', 'password redacted to fixed bullets');
+  assert.strictEqual(safeValue({ value: { value: 'hunter2' } }, false), 'hunter2', 'non-password passes through');
+  assert.strictEqual(safeValue({ value: { value: '' } }, true), null, 'empty value stays empty');
+  assert.strictEqual(safeValue({}, true), null, 'missing value → null');
 });
 
 test('bboxArr: rounds floats and returns array', () => {
@@ -456,6 +474,44 @@ test('chooseTab: stays put when nothing changed', () => {
       assert.ok(field, 'work-email field should be present');
       assert.strictEqual(field.required, true, 'required should surface as true');
       assert.strictEqual(field.invalid, true, 'aria-invalid should surface as true');
+    });
+
+    await testAsync('lean mode never exposes a raw password value', async () => {
+      // The password input is prefilled with "s3cr3t-pw". Whether Chrome's AX
+      // tree omits the value or echoes it, the brief must never carry the secret.
+      const result = await session.extract({ format: 'lean' });
+      const leaked = result.elements.some(e => e.value === 's3cr3t-pw');
+      assert.ok(!leaked, 'raw password value must not appear in the brief');
+    });
+
+    await testAsync('lean mode surfaces haspopup on the dialog-opening button', async () => {
+      const result = await session.extract({ format: 'lean' });
+      const btn = result.elements.find(e => (e.name || '').includes('Open dialog'));
+      assert.ok(btn, '"Open dialog" button should be present');
+      assert.strictEqual(btn.haspopup, 'dialog', 'aria-haspopup="dialog" should surface');
+    });
+
+    await testAsync('lean mode includes same-origin (srcdoc) iframe content', async () => {
+      // The fixture embeds a same-origin srcdoc iframe; its content shares our
+      // renderer, so getFullAXTree should stitch it into the brief.
+      const result = await session.extract({ format: 'lean' });
+      const names = [...result.elements, ...result.text].map(n => (n.name || '').toLowerCase());
+      const hasFrame = names.some(n =>
+        n.includes('frame submit') || n.includes('frame email') || n.includes('same-origin frame'));
+      assert.ok(hasFrame, 'same-origin iframe content should be present in the brief');
+    });
+
+    await testAsync('transformed custom button is clickable via content-quads (transform-aware)', async () => {
+      // .transform-target carries rotate(-2deg) translateX(8px); getContentQuads
+      // reports the real post-transform polygon, so clickablePoint should aim via
+      // quads (source 'quad') rather than falling back to the raw bbox center.
+      const { clickablePoint } = require('../lib/executors/page');
+      const brief = await session.extract({ format: 'lean' });
+      const el = brief.elements.find(e => (e.name || '').includes('Transformed custom action'));
+      assert.ok(el, 'transformed custom action should be listed');
+      const pt = await clickablePoint({ session, brief, ref: el.ref });
+      assert.strictEqual(pt.source, 'quad', 'aimed via content-quads, not the bbox fallback');
+      assert.ok(Number.isFinite(pt.x) && Number.isFinite(pt.y), 'resolved a concrete aim point');
     });
 
     await testAsync('full mode includes CSS-invisible elements (unfiltered)', async () => {

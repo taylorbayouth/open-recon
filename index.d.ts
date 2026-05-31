@@ -58,6 +58,8 @@ export interface FullElement {
   expanded: boolean | null;
   checked: boolean | 'mixed' | null;
   selected: boolean | null;
+  /** AX `haspopup` token (e.g. `"menu"`, `"dialog"`), or null. */
+  haspopup: string | null;
   required: boolean | null;
   /** AX `invalid` token: `"false"` | `"true"` | `"grammar"` | `"spelling"`. */
   invalid: string | null;
@@ -79,6 +81,8 @@ export interface LeanElement {
   checked?: boolean | 'mixed';
   selected?: boolean;
   expanded?: boolean;
+  /** Set when the control opens a popup: "menu" | "listbox" | "tree" | "grid" | "dialog" | "true". */
+  haspopup?: string;
   required?: true;
   /** Present (and `true`) only when the field failed validation. */
   invalid?: true;
@@ -138,6 +142,8 @@ export interface TreeInteractiveNode {
   checked?: boolean | 'mixed';
   selected?: boolean;
   expanded?: boolean;
+  /** Set when the control opens a popup: "menu" | "listbox" | "tree" | "grid" | "dialog" | "true". */
+  haspopup?: string;
   required?: true;
   /** Present (and `true`) only when the field failed validation. */
   invalid?: true;
