@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const CDP = require('chrome-remote-interface');
 
-const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
+const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, isInvalid, popupKind, safeValue, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect, chooseTab } = require('../lib/connect');
 
@@ -189,6 +189,37 @@ test('isCursorClickable: semantic roles are excluded (handled by role/text paths
   assert.strictEqual(isCursorClickable('button', 'Save', { cursor: 'pointer' }), false);
   assert.strictEqual(isCursorClickable('link', 'Home', { cursor: 'pointer' }), false);
   assert.strictEqual(isCursorClickable('heading', 'Title', { cursor: 'pointer' }), false);
+});
+
+test('isInvalid: only non-"false" AX tokens count as invalid', () => {
+  // The AX `invalid` property is a token, and its no-error value is the STRING
+  // "false" — which is truthy. isInvalid must treat it (and absence) as valid.
+  assert.strictEqual(isInvalid('true'), true);
+  assert.strictEqual(isInvalid('grammar'), true);
+  assert.strictEqual(isInvalid('spelling'), true);
+  assert.strictEqual(isInvalid(true), true);
+  assert.strictEqual(isInvalid('false'), false, '"false" string must not be invalid');
+  assert.strictEqual(isInvalid(false), false);
+  assert.strictEqual(isInvalid(null), false);
+  assert.strictEqual(isInvalid(undefined), false);
+});
+
+test('popupKind: only a non-"false" token signals a popup', () => {
+  // Same token shape as `invalid`: the no-popup value is the truthy string "false".
+  assert.strictEqual(popupKind('menu'), 'menu');
+  assert.strictEqual(popupKind('dialog'), 'dialog');
+  assert.strictEqual(popupKind(true), 'true');
+  assert.strictEqual(popupKind('false'), null, '"false" string opens nothing');
+  assert.strictEqual(popupKind(false), null);
+  assert.strictEqual(popupKind(null), null);
+  assert.strictEqual(popupKind(undefined), null);
+});
+
+test('safeValue: redacts password values, passes everything else through', () => {
+  assert.strictEqual(safeValue({ value: { value: 'hunter2' } }, true), '••••••', 'password redacted to fixed bullets');
+  assert.strictEqual(safeValue({ value: { value: 'hunter2' } }, false), 'hunter2', 'non-password passes through');
+  assert.strictEqual(safeValue({ value: { value: '' } }, true), null, 'empty value stays empty');
+  assert.strictEqual(safeValue({}, true), null, 'missing value → null');
 });
 
 test('bboxArr: rounds floats and returns array', () => {
@@ -432,6 +463,55 @@ test('chooseTab: stays put when nothing changed', () => {
       for (const hidden of CSS_HIDDEN) {
         assert.ok(!names.includes(hidden), `"${hidden}" should be filtered in lean mode`);
       }
+    });
+
+    await testAsync('lean mode surfaces required + invalid on a form field', async () => {
+      // The "Work email" input is `required` and `aria-invalid="true"`; both must
+      // ride through the AX tree onto the lean element so the planner can see
+      // which field failed validation without scraping nearby error text.
+      const result = await session.extract({ format: 'lean' });
+      const field = result.elements.find(e => (e.name || '').toLowerCase().includes('work email'));
+      assert.ok(field, 'work-email field should be present');
+      assert.strictEqual(field.required, true, 'required should surface as true');
+      assert.strictEqual(field.invalid, true, 'aria-invalid should surface as true');
+    });
+
+    await testAsync('lean mode never exposes a raw password value', async () => {
+      // The password input is prefilled with "s3cr3t-pw". Whether Chrome's AX
+      // tree omits the value or echoes it, the brief must never carry the secret.
+      const result = await session.extract({ format: 'lean' });
+      const leaked = result.elements.some(e => e.value === 's3cr3t-pw');
+      assert.ok(!leaked, 'raw password value must not appear in the brief');
+    });
+
+    await testAsync('lean mode surfaces haspopup on the dialog-opening button', async () => {
+      const result = await session.extract({ format: 'lean' });
+      const btn = result.elements.find(e => (e.name || '').includes('Open dialog'));
+      assert.ok(btn, '"Open dialog" button should be present');
+      assert.strictEqual(btn.haspopup, 'dialog', 'aria-haspopup="dialog" should surface');
+    });
+
+    await testAsync('lean mode includes same-origin (srcdoc) iframe content', async () => {
+      // The fixture embeds a same-origin srcdoc iframe; its content shares our
+      // renderer, so getFullAXTree should stitch it into the brief.
+      const result = await session.extract({ format: 'lean' });
+      const names = [...result.elements, ...result.text].map(n => (n.name || '').toLowerCase());
+      const hasFrame = names.some(n =>
+        n.includes('frame submit') || n.includes('frame email') || n.includes('same-origin frame'));
+      assert.ok(hasFrame, 'same-origin iframe content should be present in the brief');
+    });
+
+    await testAsync('transformed custom button is clickable via content-quads (transform-aware)', async () => {
+      // .transform-target carries rotate(-2deg) translateX(8px); getContentQuads
+      // reports the real post-transform polygon, so clickablePoint should aim via
+      // quads (source 'quad') rather than falling back to the raw bbox center.
+      const { clickablePoint } = require('../lib/executors/page');
+      const brief = await session.extract({ format: 'lean' });
+      const el = brief.elements.find(e => (e.name || '').includes('Transformed custom action'));
+      assert.ok(el, 'transformed custom action should be listed');
+      const pt = await clickablePoint({ session, brief, ref: el.ref });
+      assert.strictEqual(pt.source, 'quad', 'aimed via content-quads, not the bbox fallback');
+      assert.ok(Number.isFinite(pt.x) && Number.isFinite(pt.y), 'resolved a concrete aim point');
     });
 
     await testAsync('full mode includes CSS-invisible elements (unfiltered)', async () => {
