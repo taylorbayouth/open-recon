@@ -74,7 +74,7 @@ async function main() {
 
 async function clearOverlay(client) {
   await client.Runtime.evaluate({
-    expression: `document.getElementById('__recon_overlay__')?.remove();`,
+    expression: `document.getElementById('__browser_agent_overlay__')?.remove();`,
   });
 }
 
@@ -129,7 +129,7 @@ async function annotateHittability(client, brief, els) {
 
 // Runs in the page. Draws one labeled box per element at its page-coordinate bbox.
 function overlayFn(els) {
-  document.getElementById('__recon_overlay__')?.remove();
+  document.getElementById('__browser_agent_overlay__')?.remove();
   const palette = {
     clear:   { line: 'rgba(23,160,92,0.95)',  fill: 'rgba(23,160,92,0.10)',  label: 'rgba(23,120,76,0.95)' },
     partial: { line: 'rgba(234,179,8,0.98)',  fill: 'rgba(234,179,8,0.12)',  label: 'rgba(161,98,7,0.95)' },
@@ -137,7 +137,7 @@ function overlayFn(els) {
     unknown: { line: 'rgba(107,114,128,0.90)', fill: 'rgba(107,114,128,0.10)', label: 'rgba(75,85,99,0.95)' },
   };
   const root = document.createElement('div');
-  root.id = '__recon_overlay__';
+  root.id = '__browser_agent_overlay__';
   Object.assign(root.style, {
     position: 'absolute', left: '0', top: '0', width: '0', height: '0',
     zIndex: '2147483647', pointerEvents: 'none',

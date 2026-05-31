@@ -1,7 +1,7 @@
 'use strict';
 
 // Quick DPR sanity check. Run with:
-//   RECON_DEBUG_COORDS=1 node check-dpr.js
+//   BROWSER_AGENT_DEBUG_COORDS=1 node check-dpr.js
 //
 // Expects Chrome on port 9222 (`npm run launch` first).
 // Navigates to example.com and dumps the bounds scale logged by extract.js.

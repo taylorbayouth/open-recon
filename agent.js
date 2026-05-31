@@ -72,7 +72,7 @@ Options:
   --context, -c <string>       Trusted background for the agent (user info,
                                preferences). Injected at the end of the system
                                prompt. Omit for none.
-  --executor <os|cdp>          Input backend. Default 'os' uses recon-input (macOS).
+  --executor <os|cdp>          Input backend. Default 'os' uses browser-input (macOS).
   --help, -h                   Show this help
 
 Config file:

@@ -1,4 +1,4 @@
-// recon-input — macOS OS-level mouse/keyboard driver for Open Recon.
+// browser-input — macOS OS-level mouse/keyboard driver for Browser Agent.
 //
 // Posts CGEvents at the HID-system level so the input is indistinguishable
 // from a real mouse/keyboard to the in-page JavaScript world. Requires
@@ -25,6 +25,7 @@
 //   { "id": "<corr>", "op": "ping" }
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
 //   { "id": "<corr>", "op": "frontapp" }                     // frontmost app id
+//   { "id": "<corr>", "op": "webarea" }                      // frontmost Chrome web area
 //   { "id": "<corr>", "op": "idle" }                         // real-user input idle
 //   { "id": "<corr>", "op": "raise", "pid": 123 }            // foreground a pid
 //
@@ -60,6 +61,90 @@ func fail(_ id: String, _ msg: String) {
 func finite(_ v: Double?) -> Double? {
     guard let v = v, v.isFinite else { return nil }
     return v
+}
+
+// ─── Accessibility geometry ─────────────────────────────────────────────────
+
+func axString(_ el: AXUIElement, _ attr: CFString) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr, &value) == .success else { return nil }
+    return value as? String
+}
+
+func axElement(_ el: AXUIElement, _ attr: CFString) -> AXUIElement? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr, &value) == .success,
+          let v = value,
+          CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
+    return (v as! AXUIElement)
+}
+
+func axChildren(_ el: AXUIElement) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &value) == .success else { return [] }
+    return (value as? [AXUIElement]) ?? []
+}
+
+func axPoint(_ el: AXUIElement, _ attr: CFString) -> CGPoint? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr, &value) == .success,
+          let v = value,
+          CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+    let axv = v as! AXValue
+    guard AXValueGetType(axv) == .cgPoint else { return nil }
+    var p = CGPoint.zero
+    AXValueGetValue(axv, .cgPoint, &p)
+    return p
+}
+
+func axSize(_ el: AXUIElement, _ attr: CFString) -> CGSize? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, attr, &value) == .success,
+          let v = value,
+          CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+    let axv = v as! AXValue
+    guard AXValueGetType(axv) == .cgSize else { return nil }
+    var s = CGSize.zero
+    AXValueGetValue(axv, .cgSize, &s)
+    return s
+}
+
+func findAXWebArea(in root: AXUIElement, maxNodes: Int = 800) -> AXUIElement? {
+    var queue = [root]
+    var index = 0
+    var seen = 0
+    while index < queue.count && seen < maxNodes {
+        let el = queue[index]
+        index += 1
+        seen += 1
+        if axString(el, kAXRoleAttribute as CFString) == "AXWebArea" { return el }
+        queue.append(contentsOf: axChildren(el))
+    }
+    return nil
+}
+
+func frontmostWebAreaFrame() -> [String: Any]? {
+    guard let app = NSWorkspace.shared.frontmostApplication,
+          let bundleId = app.bundleIdentifier,
+          bundleId.hasPrefix("com.google.Chrome") || bundleId == "org.chromium.Chromium" else {
+        return nil
+    }
+
+    let axApp = AXUIElementCreateApplication(app.processIdentifier)
+    let window = axElement(axApp, kAXFocusedWindowAttribute as CFString)
+              ?? axElement(axApp, kAXMainWindowAttribute as CFString)
+    guard let root = window, let webArea = findAXWebArea(in: root),
+          let p = axPoint(webArea, kAXPositionAttribute as CFString),
+          let s = axSize(webArea, kAXSizeAttribute as CFString),
+          p.x.isFinite, p.y.isFinite, s.width.isFinite, s.height.isFinite,
+          s.width > 0, s.height > 0 else {
+        return nil
+    }
+
+    // AXWebArea is the rendered page viewport, so its top-left replaces the
+    // inferred Chrome toolbar offset in the JS coordinate mapper.
+    return ["x": p.x, "y": p.y, "width": s.width, "height": s.height,
+            "bundleId": bundleId, "source": "macos-ax-webarea"]
 }
 
 // ─── Mouse ───────────────────────────────────────────────────────────────────
@@ -360,10 +445,17 @@ func handle(_ cmd: [String: Any]) {
         let app = NSWorkspace.shared.frontmostApplication
         ok(id, ["bundleId": app?.bundleIdentifier ?? "", "name": app?.localizedName ?? ""])
 
+    case "webarea":
+        if let frame = frontmostWebAreaFrame() {
+            ok(id, frame)
+        } else {
+            fail(id, "frontmost Chrome AXWebArea not found")
+        }
+
     case "raise":
         // Bring a specific process to the foreground by PID. Permission-free
         // (NSRunningApplication.activate needs no Accessibility/Automation grant)
-        // and PID-targeted, so preflight can foreground the open-recon Chrome
+        // and PID-targeted, so preflight can foreground the browser-agent Chrome
         // without grabbing a different Chrome instance (e.g. a personal one).
         guard let pid = (cmd["pid"] as? NSNumber)?.int32Value else { fail(id, "raise requires pid"); return }
         if let app = NSRunningApplication(processIdentifier: pid) {

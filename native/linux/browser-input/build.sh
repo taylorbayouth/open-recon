@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build recon-input — the Linux X11 OS-level input driver for Open Recon.
+# Build browser-input — the Linux X11 OS-level input driver for Browser Agent.
 #
 # Requires: gcc, x11, xtst, xscrnsaver dev headers.
 #
@@ -28,7 +28,7 @@ if ! pkg-config --exists x11 xtst xscrnsaver 2>/dev/null; then
 fi
 
 mkdir -p bin
-gcc -O2 -o bin/recon-input main.c \
+gcc -O2 -o bin/browser-input main.c \
     $(pkg-config --cflags --libs x11 xtst xscrnsaver) \
     -lm
-echo "Built: $(pwd)/bin/recon-input"
+echo "Built: $(pwd)/bin/browser-input"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build recon-input — the macOS OS-level input driver for Open Recon.
+# Build browser-input — the macOS OS-level input driver for Browser Agent.
 #
 # Requires the Xcode command-line tools (`xcode-select --install`).
 # Run once after cloning; the resulting binary is written to ignored bin/.
@@ -15,5 +15,5 @@ if ! command -v swiftc >/dev/null 2>&1; then
 fi
 
 mkdir -p bin
-swiftc -O -o bin/recon-input main.swift
-echo "Built: $(pwd)/bin/recon-input"
+swiftc -O -o bin/browser-input main.swift
+echo "Built: $(pwd)/bin/browser-input"

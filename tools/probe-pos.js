@@ -2,7 +2,7 @@
 'use strict';
 
 // Coordinate ground-truth probe. Reports the live mouse position (top-left
-// screen coords, the same space recon-input posts clicks to) every 500ms.
+// screen coords, the same space browser-input posts clicks to) every 500ms.
 //
 // Usage:
 //   node probe-pos.js
@@ -14,7 +14,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 // ../ — this script lives in tools/, the binary in native/ at the repo root.
-const bin = path.resolve(__dirname, '..', 'native', 'macos', 'recon-input', 'bin', 'recon-input');
+const bin = path.resolve(__dirname, '..', 'native', 'macos', 'browser-input', 'bin', 'browser-input');
 const child = spawn(bin, [], { stdio: ['pipe', 'pipe', 'inherit'] });
 
 let buf = '';

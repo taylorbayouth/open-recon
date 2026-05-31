@@ -1,18 +1,18 @@
-// recon-input — Linux X11 OS-level mouse/keyboard driver for Open Recon.
+// browser-input — Linux X11 OS-level mouse/keyboard driver for Browser Agent.
 //
 // Mirrors the macOS Swift helper exactly: newline-delimited JSON on stdin,
 // newline-delimited JSON responses on stdout. Same op protocol, same
 // response shape — os.js needs no structural changes.
 //
 // Requires: X11 display with XTEST and XScreenSaver extensions.
-// Link:     cc main.c -O2 -o recon-input $(pkg-config --cflags --libs x11 xtst xscrnsaver)
+// Link:     cc main.c -O2 -o browser-input $(pkg-config --cflags --libs x11 xtst xscrnsaver)
 //
 // The one non-trivial op is `type`: X11 has no "inject literal character"
 // primitive, so we temporarily remap a spare keycode to the target codepoint's
 // keysym (XK_Unicode prefix 0x01000000), send key down/up, then restore. This
 // types any Unicode regardless of the current keyboard layout.
 //
-// Ops implemented (same contract as macos/recon-input/main.swift):
+// Ops implemented (same contract as macos/browser-input/main.swift):
 //   ping, pos, axtrusted, frontapp, raise
 //   move, click, down, up
 //   type, key, scroll, scrollGesture
@@ -821,7 +821,7 @@ int main(void) {
     dpy = XOpenDisplay(display_name);
     if (!dpy) {
         // Write a JSON error rather than silently dying — os.js reads stderr
-        // but the ping sanity check (ReconInputClient.init) reads the first
+        // but the ping sanity check (BrowserInputClient.init) reads the first
         // stdout line. Emit a fail response so init surfaces the real error.
         printf("{\"id\":\"\",\"ok\":false,\"error\":\"cannot open X display: %s\"}\n",
                display_name ? display_name : "(not set)");

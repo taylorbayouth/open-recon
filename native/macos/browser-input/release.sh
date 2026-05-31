@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release script for recon-input.
+# Release script for browser-input.
 #
 # Builds the binary, signs it with a Developer ID certificate, submits it to
 # Apple's notarization service, staples the ticket into a .dmg, and produces
@@ -18,26 +18,26 @@
 #   - Developer ID Application certificate installed in your keychain
 #     (Xcode → Settings → Accounts → Manage Certificates → Developer ID Application)
 #   - Notarytool credentials stored in your keychain (one-time setup):
-#       xcrun notarytool store-credentials "open-recon" \
+#       xcrun notarytool store-credentials "browser-agent" \
 #         --apple-id "you@example.com" \
 #         --team-id "XXXXXXXXXX" \
 #         --password "xxxx-xxxx-xxxx-xxxx"
 #
 # Outputs (in dist/):
-#   recon-input-<version>-macos-universal.dmg   — notarized, stapled disk image
-#   recon-input-<version>-macos-universal.zip   — zip of the .dmg for GitHub release
+#   browser-input-<version>-macos-universal.dmg   — notarized, stapled disk image
+#   browser-input-<version>-macos-universal.zip   — zip of the .dmg for GitHub release
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION="${1:-$(date +%Y%m%d)}"
 DIST="$(pwd)/dist"
-BIN="$DIST/recon-input"
+BIN="$DIST/browser-input"
 ARCH_SUFFIX="macos"
 DMG=""   # set after build so the name reflects universal vs native
 
 SIGN_IDENTITY="Developer ID Application: Taylor Bayouth (R2L9P58JDK)"
-KEYCHAIN_PROFILE="open-recon"
+KEYCHAIN_PROFILE="browser-agent"
 
 # ─── Sanity checks ────────────────────────────────────────────────────────────
 
@@ -48,15 +48,15 @@ fi
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
-echo "→ Building recon-input …"
+echo "→ Building browser-input …"
 mkdir -p "$DIST"
 
 # Try a universal binary (arm64 + x86_64). Falls back to native arch if the
 # SDK doesn't support the other slice (older Xcode / cross-compile missing).
-if swiftc -target arm64-apple-macos11 -O -o "$DIST/recon-input-arm64" main.swift 2>/dev/null && \
-   swiftc -target x86_64-apple-macos10.15 -O -o "$DIST/recon-input-x86_64" main.swift 2>/dev/null; then
-  lipo -create -output "$BIN" "$DIST/recon-input-arm64" "$DIST/recon-input-x86_64"
-  rm "$DIST/recon-input-arm64" "$DIST/recon-input-x86_64"
+if swiftc -target arm64-apple-macos11 -O -o "$DIST/browser-input-arm64" main.swift 2>/dev/null && \
+   swiftc -target x86_64-apple-macos10.15 -O -o "$DIST/browser-input-x86_64" main.swift 2>/dev/null; then
+  lipo -create -output "$BIN" "$DIST/browser-input-arm64" "$DIST/browser-input-x86_64"
+  rm "$DIST/browser-input-arm64" "$DIST/browser-input-x86_64"
   echo "  universal binary (arm64 + x86_64)"
   ARCH_SUFFIX="macos-universal"
 else
@@ -65,14 +65,14 @@ else
   echo "  native arch only ($(uname -m))"
 fi
 
-DMG="$DIST/recon-input-${VERSION}-${ARCH_SUFFIX}.dmg"
-ZIP="$DIST/recon-input-${VERSION}-${ARCH_SUFFIX}.zip"
+DMG="$DIST/browser-input-${VERSION}-${ARCH_SUFFIX}.dmg"
+ZIP="$DIST/browser-input-${VERSION}-${ARCH_SUFFIX}.zip"
 
 # ─── Sign ─────────────────────────────────────────────────────────────────────
 
 echo "→ Signing …"
 # --options runtime enables the Hardened Runtime, required for notarization.
-# recon-input doesn't need additional entitlements: CGEvent posting is gated
+# browser-input doesn't need additional entitlements: CGEvent posting is gated
 # at runtime by the user granting Accessibility in System Settings, not by a
 # compile-time entitlement.
 codesign \
@@ -90,10 +90,10 @@ codesign --verify --deep --strict --verbose=1 "$BIN"
 echo "→ Creating disk image …"
 # Stage the binary in a temp dir so hdiutil only sees what belongs in the dmg.
 STAGING="$(mktemp -d)"
-cp "$BIN" "$STAGING/recon-input"
+cp "$BIN" "$STAGING/browser-input"
 rm -f "$DMG"
 hdiutil create \
-  -volname "recon-input" \
+  -volname "browser-input" \
   -srcfolder "$STAGING" \
   -ov -format UDZO \
   "$DMG"
@@ -126,7 +126,7 @@ echo "   (contains: $(basename "$DMG"))"
 echo ""
 echo "Next steps:"
 echo "  1. Verify Gatekeeper acceptance on a clean machine:"
-echo "       spctl --assess --type execute -v dist/recon-input"
+echo "       spctl --assess --type execute -v dist/browser-input"
 echo "  2. Attach $ZIP to the GitHub release for v${VERSION}."
 echo "  3. In the release notes, remind users to grant Accessibility permission"
 echo "     to Terminal (or their shell) in System Settings → Privacy & Security."

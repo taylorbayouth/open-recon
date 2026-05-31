@@ -17,8 +17,9 @@ runs/
 # Claude Code project settings (machine-local)
 .claude/
 
-# Built native binary — per-platform, rebuild via native/macos/recon-input/build.sh
-native/macos/recon-input/bin/
+# Built native binary — per-platform, rebuild via native/macos/browser-input/build.sh
+native/macos/browser-input/bin/
+native/linux/browser-input/bin/
 
 # Release artifacts (signed/notarized dmg + zip) — produced by release.sh
-native/macos/recon-input/dist/
+native/macos/browser-input/dist/
