@@ -1793,9 +1793,31 @@ async function backSuite() {
     assert.strictEqual(toEntry, 11);  // entries[currentIndex - 1]
   });
 
-  await test('back throws (non-fatal) when there is no previous page', async () => {
+  await test('back throws (non-fatal) when there is no previous page and no other tabs', async () => {
     const session = { client: historyClient({ currentIndex: 0, entries: [{ id: 10 }] }) };
     await assert.rejects(() => back({ session }), /no previous page/);
+  });
+
+  await test('back closes the tab and follows when no history but other tabs exist', async () => {
+    let closedId = null;
+    let followed = false;
+    const session = {
+      client: {
+        ...historyClient({ currentIndex: 0, entries: [{ id: 10 }] }),
+        Target: {
+          getTargets: async () => ({ targetInfos: [
+            { type: 'page', targetId: 'tab-A' },
+            { type: 'page', targetId: 'tab-B' },
+          ]}),
+          closeTarget: async ({ targetId }) => { closedId = targetId; },
+        },
+      },
+      _target: { id: 'tab-A' },
+      followActiveTab: async () => { followed = true; },
+    };
+    await back({ session });   // must not throw
+    assert.strictEqual(closedId, 'tab-A', 'closed the no-history tab');
+    assert.ok(followed, 'followActiveTab called to re-pin the session');
   });
 
   await test('back validates with no ref or args', () => {

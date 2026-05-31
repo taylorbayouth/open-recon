@@ -307,7 +307,7 @@ On macOS, `pageToScreen` first asks the native helper for the frontmost Chrome `
 
 A click that opens a new tab or popup leaves the CDP session pinned to the original tab. `Session.followActiveTab` (run before each snapshot) re-pins to where the action landed, reading CDP's target graph rather than guessing from OS window focus. The pure policy `chooseTab` decides: follow a child our tab opened (`openerId` — `window.open` tabs always keep it, since the child may need to communicate back to its opener); else a brand-new target that appeared since the last poll; and when our tab closes, return to its opener if still around, else the newest page. Deterministic and cross-platform.
 
-**`back()` and new tabs:** a tab opened by the browser (`target=_blank`) starts with no history. Calling `back()` from that tab throws a non-fatal error. The model should navigate to the desired URL directly rather than relying on `back()` after following a new-tab link.
+**`back()` and new tabs:** a tab opened by the browser (`target=_blank`) starts with no history. When `back()` is called with no history and other page tabs are open, the current tab is closed and `followActiveTab` re-pins the session to the opener or newest remaining tab — the same recovery the session would do naturally when a tab closes. `back()` only throws (non-fatal) when the tab has no history *and* is the only tab open.
 
 Per-element interaction *inside* a cross-origin (OOPIF) tab still needs multi-target stitching and is out of scope.
 
