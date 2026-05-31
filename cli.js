@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { extract, launch, isRunning } = require('./index');
+const { extract, launch } = require('./index');
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -21,14 +21,8 @@ async function main() {
   const opts = parseArgs();
 
   if (opts._launchOnly) {
-    const running = await isRunning(opts.port || 9222);
-    if (running) {
-      console.log(`Chrome already running on port ${opts.port || 9222}.`);
-    } else {
-      process.stderr.write('Launching Chrome...\n');
-      await launch(opts);
-      console.log(`Chrome ready on port ${opts.port || 9222}.`);
-    }
+    const port = await launch(opts);
+    console.log(`Chrome ready on port ${port}.`);
     console.log('Navigate to any page, then run: browser-agent-extract --tree');
     return;
   }
