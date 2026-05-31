@@ -24,6 +24,7 @@ const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/exe
 const { createScratchpad, filenameStemFromHint } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
 const { collectRegions, collectPasswordIds, buildSnapshotMaps } = require('../lib/extract');
+const { cleanWebText, decodeHtmlEntities } = require('../lib/text');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -997,7 +998,7 @@ async function scratchpadSuite() {
     }
   });
 
-  await test('saveText and saveImage persist assets and markdown references', () => {
+  await test('saveText appends markdown and saveImage persists assets', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
     try {
       const scratch = createScratchpad({ dir, runId: 'run-1' });
@@ -1005,14 +1006,32 @@ async function scratchpadSuite() {
       const image = scratch.saveImage({ base64: Buffer.from('png bytes').toString('base64'), title: 'Shot' });
       const md = scratch.readMarkdown();
 
-      assert.strictEqual(fs.readFileSync(text.path, 'utf8'), 'Full captured text');
+      assert.strictEqual(text.path, scratch.savedPath);
       assert.strictEqual(fs.readFileSync(image.path, 'utf8'), 'png bytes');
       assert.ok(md.includes('### Captured note'));
-      assert.ok(md.includes('- File: assets/note-1.txt'));
       assert.ok(md.includes('- Image: assets/screenshot-1.png'));
       assert.ok(md.includes('![screenshot-1.png](assets/screenshot-1.png)'));
       assert.strictEqual(scratch.textCount, 1);
       assert.strictEqual(scratch.imageCount, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('saveText cleans webpage text before appending to saved.md', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-scratch-'));
+    try {
+      const scratch = createScratchpad({ dir, runId: 'run-1' });
+      scratch.saveText({
+        content: '<h1>Title &amp; More</h1><p>Read <strong>this</strong> [link](https://example.test).</p>',
+        summary: 'Captured page text',
+      });
+
+      const md = scratch.readMarkdown();
+      assert.ok(md.includes('### Captured page text'));
+      assert.ok(md.includes('Title & More\nRead this link.'));
+      assert.ok(!md.includes('<h1>'));
+      assert.ok(!md.includes('https://example.test'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1130,7 +1149,7 @@ async function promptSuite() {
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
-    assert.ok(prompt.includes('type[@e] (intent: string?, text: string, clear: boolean?)'), 'required + optional args should be shown');
+    assert.ok(prompt.includes('type[@e] (intent: string?, text: string, clear: boolean?, submit: boolean?)'), 'required + optional args should be shown');
     assert.ok(prompt.includes('wait (intent: string?, ms: number)'), 'wait args should be shown');
     assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, intent: string?, hint: string?)'), 'optional ref types should be shown');
     assert.ok(prompt.includes('done (intent: string?, result: string?)'), 'optional args should be marked');
@@ -1168,6 +1187,35 @@ async function tokenSuite() {
     assert.strictEqual(estimateTokens(''), 0);
     assert.strictEqual(estimateTokens('abcd'), 1);
     assert.strictEqual(estimateTokens({ role: 'user', content: 'abcdefgh' }), 4);
+  });
+}
+
+async function textSuite() {
+  console.log('\ntext:');
+
+  await test('decodeHtmlEntities handles named, numeric, and hex entities', () => {
+    assert.strictEqual(
+      decodeHtmlEntities('Tom &amp; Jerry &#169; &#x1F600; &UNKNOWN;'),
+      'Tom & Jerry © 😀 &UNKNOWN;',
+    );
+  });
+
+  await test('cleanWebText strips web markup and keeps readable content', () => {
+    const input = `
+      <style>.x{}</style><script>alert(1)</script>
+      <h1>Title &amp; More</h1>
+      <p>Hello&nbsp;<strong>world</strong>.</p>
+      <ul><li>First</li><li><a href="/x">Second link</a></li></ul>
+    `;
+
+    assert.strictEqual(cleanWebText(input), 'Title & More\n\nHello world.\n\nFirst\nSecond link');
+  });
+
+  await test('cleanWebText flattens markdown into plain text', () => {
+    assert.strictEqual(
+      cleanWebText('# Heading\n\n- **One** [link](https://example.test)\n- `Two`\n\n> Quote'),
+      'Heading\nOne link\nTwo\n\nQuote',
+    );
   });
 }
 
@@ -1556,7 +1604,31 @@ async function loopSuite() {
     }
   });
 
-  await test('finished run folds saved.md into report.md and removes saved.md', async () => {
+  await test('report.md cleans navigate action URLs', async () => {
+    installFakeProvider([
+      [action('navigate', { args: { url: 'https://example.test/path?q=keep&utm_source=nope&fbclid=abc#frag' } })],
+      [action('done', { args: { result: 'ok' } })],
+    ]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
+    try {
+      const r = await run({
+        session: makeFakeSession([makeBrief, makeBrief]),
+        task: 'navigate cleanly',
+        config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
+      });
+      const report = fs.readFileSync(path.join(dir, r.id, 'report.md'), 'utf8');
+
+      assert.strictEqual(r.status, 'completed', r.error);
+      assert.match(report, /navigate\*\* → https:\/\/example\.test\/path\?q=keep/);
+      assert.ok(!report.includes('utm_source'), 'tracking param should be dropped');
+      assert.ok(!report.includes('fbclid'), 'click id should be dropped');
+      assert.ok(!report.includes('#frag'), 'fragment should be dropped');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('finished run folds saved.md into report.md and keeps saved.md', async () => {
     installFakeProvider([
       [action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } })],
       [action('done', { args: { result: 'ok' } })],
@@ -1575,7 +1647,7 @@ async function loopSuite() {
 
       assert.strictEqual(r.status, 'completed', r.error);
       assert.ok(report.includes('Full captured finding'), 'report includes saved.md content');
-      assert.ok(!fs.existsSync(savedPath), 'saved.md is removed after final report is written');
+      assert.ok(fs.existsSync(savedPath), 'saved.md remains after final report is written');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2396,6 +2468,7 @@ async function postJSONSuite() {
   await logSuite();
   await promptSuite();
   await tokenSuite();
+  await textSuite();
   await loopSuite();
   await reflectSuite();
   await backSuite();
