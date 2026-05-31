@@ -93,14 +93,27 @@ function makeFakeSession(briefQueue) {
 
 // Returns the array of `req` objects the loop sent, so tests can inspect the
 // exact prompt assembled each turn.
-function installFakeProvider(turns) {
-  let i = 0;
+function installFakeProvider(turns, reflectTurns = []) {
+  let i = 0;   // action-queue cursor (tooled planning turns)
+  let r = 0;   // reflect-queue cursor (no-tools "moment of silence" turns)
   const requests = [];
   planMod.providers.fake = {
     name: 'fake',
     defaultModel: 'fake-1',
     async plan(req) {
       requests.push(req);
+      // A no-tools call is a reflection turn: a real provider can only reply with
+      // prose, so we return text and do NOT advance the action queue. Empty text
+      // (the default) models "no usable decision" → the loop falls through to its
+      // normal guard, which is what the isolated guard tests expect.
+      if (!req.tools || req.tools.length === 0) {
+        const text = reflectTurns.length ? reflectTurns[Math.min(r, reflectTurns.length - 1)] : '';
+        r++;
+        return {
+          kind: 'completion', version: '1.0', provider: 'fake', model: 'fake-1',
+          raw: {}, actions: [], text, usage: {}, elapsedMs: 0,
+        };
+      }
       const actions = turns[Math.min(i, turns.length - 1)];
       i++;
       return {
@@ -125,6 +138,9 @@ const baseConfig = (overrides = {}) => ({
   view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
   executor: { backend: 'cdp' },
   log: { enabled: false },
+  // Reflection ("moment of silence") off by default so the guard tests exercise
+  // the stuck/empty/max-steps aborts in isolation; the reflection suite opts in.
+  reflect: { enabled: false, ...(overrides.reflect || {}) },
 });
 
 // ─── suites ──────────────────────────────────────────────────────────────────
@@ -1540,6 +1556,100 @@ async function loopSuite() {
   });
 }
 
+async function reflectSuite() {
+  console.log('\nreflection (moment of silence):');
+
+  await test('a stuck run reflects and is rescued instead of aborting', async () => {
+    const reqs = installFakeProvider(
+      [
+        [action('click', { ref: '@e1' })],   // turns 1-3: the same dead click
+        [action('click', { ref: '@e1' })],
+        [action('click', { ref: '@e1' })],
+        [action('scroll', { args: { direction: 'down' } })],  // the pivot after reflection
+        [action('done', { args: { result: 'ok' } })],
+      ],
+      ['Pivot: scroll down to reveal the results list'],         // the reflection decision
+    );
+    const session = makeFakeSession([makeBrief]);                // stable brief ⇒ no page change
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({
+        loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 },
+        // budgetTurnFraction high so only the stuck trigger fires in this window.
+        reflect: { enabled: true, maxReflections: 10, cooldownTurns: 4, budgetTurnFraction: 0.99 },
+      }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const reflectCalls = reqs.filter(q => !q.tools || q.tools.length === 0);
+    assert.strictEqual(reflectCalls.length, 1, 'exactly one reflection (no-tools) turn fired');
+    const reflectCompletion = r.completions.find(c => Array.isArray(c.actions) && c.actions.length === 0 && c.text);
+    assert.ok(reflectCompletion, 'the reflection decision is recorded as a completion');
+    assert.match(reflectCompletion.text, /scroll down/i);
+    // The pivot ran and the run finished — the dead click did not abort it.
+    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['click', 'click', 'scroll', 'done']);
+  });
+
+  await test('reflection is capped: maxReflections 0 still aborts as stuck', async () => {
+    const reqs = installFakeProvider([[action('click', { ref: '@e1' })]], ['Pivot somewhere new']);
+    const session = makeFakeSession([makeBrief]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({
+        loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 },
+        reflect: { enabled: true, maxReflections: 0 },
+      }),
+    });
+    assert.strictEqual(r.status, 'stuck', r.error);
+    const reflectCalls = reqs.filter(q => !q.tools || q.tools.length === 0);
+    assert.strictEqual(reflectCalls.length, 0, 'cap of 0 makes no reflection call');
+  });
+
+  await test('budget trigger fires once and does not consume the action queue', async () => {
+    const reqs = installFakeProvider(
+      [
+        [action('click', { ref: '@e1' })],
+        [action('scroll', { args: { direction: 'down' } })],
+        [action('click', { ref: '@t1' })],
+        [action('done', { args: { result: 'ok' } })],
+      ],
+      ['Staying the course — close to the answer'],
+    );
+    // Distinct briefs each turn ⇒ changed=true ⇒ no stuck streak; only budget fires.
+    const session = makeFakeSession([
+      () => makeBrief({ title: 'A' }),
+      () => makeBrief({ title: 'B' }),
+      () => makeBrief({ title: 'C' }),
+      () => makeBrief({ title: 'D' }),
+      () => makeBrief({ title: 'E' }),
+    ]);
+    const r = await run({
+      session, task: 'x',
+      config: baseConfig({
+        loop: { maxSteps: 5, shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 },
+        reflect: { enabled: true, maxReflections: 10, cooldownTurns: 4, budgetTurnFraction: 0.6 },
+      }),
+    });
+    assert.strictEqual(r.status, 'completed', r.error);
+    const reflectCalls = reqs.filter(q => !q.tools || q.tools.length === 0);
+    assert.strictEqual(reflectCalls.length, 1, 'exactly one budget reflection');
+    // All three planned actions ran in order — reflection did not steal a queue slot.
+    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['click', 'scroll', 'click', 'done']);
+  });
+
+  await test('clipSaved keeps every heading and tail-trims the body', () => {
+    const { clipSaved } = require('../lib/reflect');
+    const body = 'x'.repeat(5000);
+    const md = `### First finding\n${body}\n### Last finding\nrecent detail here`;
+    const clipped = clipSaved(md, 200);
+    assert.ok(clipped.includes('### First finding'), 'early heading survives');
+    assert.ok(clipped.includes('### Last finding'), 'late heading survives');
+    assert.ok(clipped.includes('recent detail here'), 'most recent body kept');
+    assert.ok(clipped.length < md.length, 'overall content trimmed');
+    // Under the limit ⇒ returned unchanged.
+    assert.strictEqual(clipSaved('### Only\nshort', 200), '### Only\nshort');
+  });
+}
+
 async function linkPatchSuite() {
   console.log('\nlink targeting (collapse new tabs):');
   const { Session } = require('../lib/connect');
@@ -2181,6 +2291,7 @@ async function postJSONSuite() {
   await promptSuite();
   await tokenSuite();
   await loopSuite();
+  await reflectSuite();
   await backSuite();
   await linkPatchSuite();
   await memorySuite();

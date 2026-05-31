@@ -187,7 +187,7 @@ The top-level artifact. Loop builds this incrementally and emits it on exit. Thi
   "task": "<the original goal>",
   "model": "claude-opus-4-7",
   "startedAt": "...", "endedAt": "...",
-  "status": "completed" | "failed" | "max-steps" | "stuck" | "empty-plan" | "aborted",
+  "status": "completed" | "failed" | "max-steps" | "max-iterations" | "stuck" | "empty-plan" | "aborted",
   "result": "...",                // from `done` action if status=completed
   "steps":       [ /* Step[] */ ],
   "completions": [ /* Completion[] */ ],
@@ -468,8 +468,19 @@ The known limitation: an event log captures actions, navigations, and errors, bu
 |---|---|
 | `done` verb emitted | `completed` |
 | Step count exceeds `maxSteps` (default: 30) | `max-steps` |
+| Loop passes exceed `maxIterations` (absolute ceiling, counts everything) | `max-iterations` |
 | Infrastructure error or unrecoverable exception | `failed` |
 | External cancel (`AbortSignal`) | `aborted` |
+
+### Reflection: the "moment of silence" (`lib/reflect.js`)
+
+The stuck/empty-plan aborts above are blunt: a flailing agent is killed rather than redirected. Reflection inserts a chance to recover *before* those aborts fire. When the loop detects the agent is flailing — `stuckStreak` or `emptyPlanStreak` hitting its threshold — or crosses a budget fraction (`reflect.budgetTurnFraction` of `maxSteps`, fired once), it runs one **reflection turn**: a Plan call with **no tools and no page listing**, handed only the task and a clip of the scratchpad (`saved.md`). Stripped of the live page, the model judges its own trajectory and returns a single `<15-word` decision — stay the course, or pivot in concrete action terms.
+
+- **Loop-triggered, not a verb.** The model deepest in a loop is the least likely to ask for a pause, so the loop fires it on the signals it already computes; it is not in the action registry.
+- **Persisted as an event.** The decision line is pushed into the event log as a permanent step, so every subsequent turn reads the pivot. The long-form reasoning is *not* requested (fewer output tokens), and because the report is built from `Steps` (not the event log), reflections never leak into the deliverable.
+- **Bounded.** Capped at `reflect.maxReflections` per run with a `reflect.cooldownTurns` gap, so it can't reflect itself to death. A reflection turn is refunded from `maxSteps` (`iter--`) — it doesn't cost the agent working budget — but still counts toward the absolute `maxIterations` ceiling.
+- **Clean re-entry.** On firing it clears the flailing guards and `lastHash`, forcing a fresh extract so the pivot acts on a real page. If reflection is unavailable (disabled, capped, or in cooldown), the original abort proceeds as before.
+- **Scratchpad clipping.** `clipSaved` keeps every `###` heading (so an early finding never disappears) and tail-trims only the body to `reflect.savedMaxChars` — recency-truncation alone would drop the earliest, often most important, findings.
 
 ---
 
