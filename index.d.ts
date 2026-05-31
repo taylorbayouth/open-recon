@@ -58,6 +58,9 @@ export interface FullElement {
   expanded: boolean | null;
   checked: boolean | 'mixed' | null;
   selected: boolean | null;
+  required: boolean | null;
+  /** AX `invalid` token: `"false"` | `"true"` | `"grammar"` | `"spelling"`. */
+  invalid: string | null;
   disabled: boolean | null;
   url: string | null;
   bbox: BBox | null;
@@ -76,6 +79,9 @@ export interface LeanElement {
   checked?: boolean | 'mixed';
   selected?: boolean;
   expanded?: boolean;
+  required?: true;
+  /** Present (and `true`) only when the field failed validation. */
+  invalid?: true;
   disabled?: true;
 }
 
@@ -132,6 +138,9 @@ export interface TreeInteractiveNode {
   checked?: boolean | 'mixed';
   selected?: boolean;
   expanded?: boolean;
+  required?: true;
+  /** Present (and `true`) only when the field failed validation. */
+  invalid?: true;
   disabled?: true;
 }
 

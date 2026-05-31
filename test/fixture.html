@@ -226,6 +226,11 @@
             <input id="profile-url" type="url" placeholder="https://example.test/profile">
           </div>
           <div>
+            <label for="work-email">Work email</label>
+            <!-- required + failing validation: exercises the AX required/invalid surfacing -->
+            <input id="work-email" type="email" required aria-invalid="true" value="not-an-email">
+          </div>
+          <div>
             <label for="plan">Plan</label>
             <select id="plan">
               <option>Starter</option>

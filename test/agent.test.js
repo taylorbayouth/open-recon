@@ -237,6 +237,50 @@ async function reduceSuite() {
     const moved = makeBrief({ regions: [{ role: 'canvas', bbox: [500, 500, 10, 10], inViewport: true }] });
     assert.strictEqual(computeBriefHash(withCanvas), computeBriefHash(moved), 'region bbox excluded from hash');
   });
+
+  await test('collapses internal whitespace so a multi-line name stays on one line', () => {
+    const brief = makeBrief({
+      // a wrapped button label / alt text with hard line breaks and tabs
+      elements: [{ ref: '@e1', role: 'button', name: 'Add\n   to\t cart', bbox: [10, 10, 80, 30] }],
+      text: [{ ref: '@t1', role: 'paragraph', name: 'line one\nline two', bbox: [10, 60, 200, 40] }],
+      lookup: { '@e1': 1, '@t1': 2 },
+    });
+    const listing = reduce(brief, { includeText: true }).listing;
+    assert.strictEqual(listing.split('\n').length, 2, 'two nodes ⇒ exactly two lines (no embedded newline)');
+    assert.ok(listing.includes('"Add to cart"'), 'whitespace runs collapse to single spaces');
+    assert.ok(listing.includes('"line one line two"'), 'text node names collapse too');
+  });
+
+  await test('truncates an over-long interactive name (stretched-link cards)', () => {
+    const long = 'x'.repeat(500);
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'link', name: long, bbox: [10, 10, 80, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    const line = reduce(brief, { includeText: false, maxTextChars: 200 }).listing;
+    assert.ok(line.includes('…'), 'long name is ellipsized');
+    assert.ok(line.length < long.length, 'rendered line is shorter than the raw name');
+  });
+
+  await test('surfaces required and invalid form-field states', () => {
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'textbox', name: 'Email', required: true, invalid: true, bbox: [10, 10, 200, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    const listing = reduce(brief, { includeText: false }).listing;
+    assert.match(listing, /\(required\)/, 'required marker present');
+    assert.match(listing, /\(invalid\)/, 'invalid marker present');
+  });
+
+  await test('does not flag the AX "false" invalid token (full-mode raw value)', () => {
+    // full-mode briefs carry the raw AX token; "false" is a truthy string and
+    // must NOT render as (invalid).
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'textbox', name: 'Email', invalid: 'false', bbox: [10, 10, 200, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    assert.ok(!reduce(brief, { includeText: false }).listing.includes('(invalid)'), '"false" token is not invalid');
+  });
 }
 
 // Build a one-document DOMSnapshot from a compact node spec. Each node is

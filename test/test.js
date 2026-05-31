@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const CDP = require('chrome-remote-interface');
 
-const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, bboxArr } = require('../lib/extract');
+const { flattenProperties, isInViewport, isInPerceptionBand, isLeanVisible, isCursorClickable, isInvalid, bboxArr } = require('../lib/extract');
 const { isRunning } = require('../lib/launch');
 const { connect, chooseTab } = require('../lib/connect');
 
@@ -189,6 +189,19 @@ test('isCursorClickable: semantic roles are excluded (handled by role/text paths
   assert.strictEqual(isCursorClickable('button', 'Save', { cursor: 'pointer' }), false);
   assert.strictEqual(isCursorClickable('link', 'Home', { cursor: 'pointer' }), false);
   assert.strictEqual(isCursorClickable('heading', 'Title', { cursor: 'pointer' }), false);
+});
+
+test('isInvalid: only non-"false" AX tokens count as invalid', () => {
+  // The AX `invalid` property is a token, and its no-error value is the STRING
+  // "false" — which is truthy. isInvalid must treat it (and absence) as valid.
+  assert.strictEqual(isInvalid('true'), true);
+  assert.strictEqual(isInvalid('grammar'), true);
+  assert.strictEqual(isInvalid('spelling'), true);
+  assert.strictEqual(isInvalid(true), true);
+  assert.strictEqual(isInvalid('false'), false, '"false" string must not be invalid');
+  assert.strictEqual(isInvalid(false), false);
+  assert.strictEqual(isInvalid(null), false);
+  assert.strictEqual(isInvalid(undefined), false);
 });
 
 test('bboxArr: rounds floats and returns array', () => {
@@ -432,6 +445,17 @@ test('chooseTab: stays put when nothing changed', () => {
       for (const hidden of CSS_HIDDEN) {
         assert.ok(!names.includes(hidden), `"${hidden}" should be filtered in lean mode`);
       }
+    });
+
+    await testAsync('lean mode surfaces required + invalid on a form field', async () => {
+      // The "Work email" input is `required` and `aria-invalid="true"`; both must
+      // ride through the AX tree onto the lean element so the planner can see
+      // which field failed validation without scraping nearby error text.
+      const result = await session.extract({ format: 'lean' });
+      const field = result.elements.find(e => (e.name || '').toLowerCase().includes('work email'));
+      assert.ok(field, 'work-email field should be present');
+      assert.strictEqual(field.required, true, 'required should surface as true');
+      assert.strictEqual(field.invalid, true, 'aria-invalid should surface as true');
     });
 
     await testAsync('full mode includes CSS-invisible elements (unfiltered)', async () => {
