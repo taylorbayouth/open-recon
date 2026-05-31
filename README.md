@@ -179,6 +179,16 @@ xcode-select --install
 bash native/macos/browser-input/build.sh
 ```
 
+Each helper reports a build version (the `version` op), and the source carries a
+matching `DRIVER_VERSION` (`native/macos/browser-input/main.swift`,
+`native/linux/browser-input/main.c`) that preflight pins against. Because a
+`git pull` updates the source but never the ignored binary, preflight checks the
+installed helper's version on every run and refreshes an outdated one — rebuilding
+from source where the toolchain is available (macOS with Xcode CLI tools, or
+Linux), otherwise pulling the latest notarized macOS release. Bump
+`DRIVER_VERSION` in both sources and `EXPECTED_DRIVER_VERSION` in
+`lib/preflight.js` together whenever the helper's input behavior changes.
+
 If Chrome is installed somewhere unusual, set its executable path explicitly:
 
 ```bash

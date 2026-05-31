@@ -29,6 +29,7 @@
 //   { "id": "<corr>", "op": "webarea" }                      // frontmost Chrome web area
 //   { "id": "<corr>", "op": "idle" }                         // real-user input idle
 //   { "id": "<corr>", "op": "raise", "pid": 123 }            // foreground a pid
+//   { "id": "<corr>", "op": "version" }                      // driver build version
 //
 // Response shape:
 //   { "id": "<corr>", "ok": true,  "data": { ... } }
@@ -37,6 +38,14 @@
 import Foundation
 import CoreGraphics
 import AppKit
+
+// Driver build version. Bump whenever the driver's input behavior changes (e.g.
+// the type/clear settle timing). preflight compares this against the version it
+// expects and rebuilds/re-downloads an outdated binary, so a `git pull` that
+// updates this source actually reaches the running driver. Keep in lockstep with
+// EXPECTED_DRIVER_VERSION in lib/preflight.js and DRIVER_VERSION in the Linux
+// main.c.
+let DRIVER_VERSION = 2
 
 // ─── JSON I/O ────────────────────────────────────────────────────────────────
 
@@ -439,6 +448,11 @@ func handle(_ cmd: [String: Any]) {
     switch op {
     case "ping":
         ok(id, ["pong": true])
+
+    case "version":
+        // Build version, so preflight can detect an outdated binary and refresh
+        // it (an older binary without this op replies ok:false → treated as v0).
+        ok(id, ["version": DRIVER_VERSION])
 
     case "axtrusted":
         // Reports whether this process holds Accessibility permission. Without
