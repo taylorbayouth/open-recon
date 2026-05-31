@@ -16,7 +16,7 @@
 //   ping, pos, axtrusted, frontapp, raise
 //   move, click, down, up
 //   type, key, scroll, scrollGesture
-//   idle
+//   idle, version
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +31,12 @@
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/scrnsaver.h>
+
+// Driver build version. Bump whenever the driver's input behavior changes. Kept
+// in lockstep with EXPECTED_DRIVER_VERSION in lib/preflight.js and DRIVER_VERSION
+// in the macOS main.swift; preflight rebuilds an outdated binary so a `git pull`
+// that updates this source reaches the running driver.
+#define DRIVER_VERSION 2
 
 // ─── Minimal JSON parser ──────────────────────────────────────────────────────
 // We only need: get string by key, get number by key, get string-array by key.
@@ -619,6 +625,16 @@ static void handle(const char *line) {
     // ── ping ──────────────────────────────────────────────────────────────────
     if (!strcmp(op, "ping")) {
         write_ok(id, "\"pong\":true");
+        return;
+    }
+
+    // ── version ─────────────────────────────────────────────────────────────────
+    // Build version, so preflight can detect an outdated binary and rebuild it
+    // (an older binary without this op replies ok:false → treated as v0).
+    if (!strcmp(op, "version")) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "\"version\":%d", DRIVER_VERSION);
+        write_ok(id, buf);
         return;
     }
 
