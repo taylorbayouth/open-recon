@@ -95,7 +95,7 @@ function makeFakeSession(briefQueue) {
 // exact prompt assembled each turn.
 function installFakeProvider(turns, reflectTurns = []) {
   let i = 0;   // action-queue cursor (tooled planning turns)
-  let r = 0;   // reflect-queue cursor (no-tools "moment of silence" turns)
+  let r = 0;   // reflect-queue cursor (no-tools reflection turns)
   const requests = [];
   planMod.providers.fake = {
     name: 'fake',
@@ -138,7 +138,7 @@ const baseConfig = (overrides = {}) => ({
   view: { includeText: true, includeCoords: true, maxTextChars: 200, dedupeText: true },
   executor: { backend: 'cdp' },
   log: { enabled: false },
-  // Reflection ("moment of silence") off by default so the guard tests exercise
+  // Reflection off by default so the guard tests exercise
   // the stuck/empty/max-steps aborts in isolation; the reflection suite opts in.
   reflect: { enabled: false, ...(overrides.reflect || {}) },
 });
@@ -1333,7 +1333,7 @@ async function loopSuite() {
 
   await test('monotonic scrolling never triggers a reflection turn', async () => {
     // Long-page reading (all down) earns only the soft warning — it must NOT
-    // escalate to a moment of silence, no matter how many scrolls.
+    // escalate to a reflection turn, no matter how many scrolls.
     installFakeProvider([
       [action('scroll', { args: { direction: 'down' } })],
       [action('scroll', { args: { direction: 'down' } })],
@@ -1352,7 +1352,7 @@ async function loopSuite() {
       config: baseConfig({ loop: { maxScrollReversals: 3, maxSameDirectionScrolls: 3 } }),
     });
     assert.strictEqual(r.status, 'completed', r.error);
-    assert.ok(!r.completions.some(c => /moment of silence|scroll-oscillation/.test(JSON.stringify(c))),
+    assert.ok(!r.completions.some(c => /reflection|scroll-oscillation/.test(JSON.stringify(c))),
       'monotonic scrolling must not fire a reflection');
   });
 
@@ -1363,7 +1363,7 @@ async function loopSuite() {
         [action('scroll', { args: { direction: 'up' } })],   // reversal 1
         [action('scroll', { args: { direction: 'down' } })], // reversal 2
         [action('scroll', { args: { direction: 'up' } })],   // reversal 3 → escalate
-        [action('done', { args: {} })],                       // pivot after the moment of silence
+        [action('done', { args: {} })],                       // pivot after the reflection
       ],
       ['Pivot: save the section then go back to search'],     // the reflection decision
     );
@@ -1642,7 +1642,7 @@ async function loopSuite() {
 }
 
 async function reflectSuite() {
-  console.log('\nreflection (moment of silence):');
+  console.log('\nreflection:');
 
   await test('a stuck run reflects and is rescued instead of aborting', async () => {
     const reqs = installFakeProvider(
@@ -1672,6 +1672,14 @@ async function reflectSuite() {
     assert.match(reflectCompletion.text, /scroll down/i);
     // The pivot ran and the run finished — the dead click did not abort it.
     assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['click', 'click', 'scroll', 'done']);
+    // The decision is handed to the NEXT turn as a highlighted directive (not
+    // just buried in History), and shown exactly once — the turn after it must
+    // not still carry the directive.
+    const tooled = reqs.filter(q => q.tools && q.tools.length);
+    const withDirective = tooled.filter(q =>
+      /⮕ REFLECT/.test(JSON.stringify(q.messages)) &&
+      /scroll down to reveal the results list/.test(JSON.stringify(q.messages)));
+    assert.strictEqual(withDirective.length, 1, 'pivot directive is shown on exactly one turn');
   });
 
   await test('reflection is capped: maxReflections 0 still aborts as stuck', async () => {
