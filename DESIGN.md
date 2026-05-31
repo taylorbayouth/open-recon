@@ -260,7 +260,7 @@ The LLM marks task completion by emitting `{ verb: "done", args: { result: "…"
 | Backend | Module | Mechanism | Use case |
 |---|---|---|---|
 | `cdp` | `lib/executors/cdp.js` | `Input.dispatchMouseEvent` / `Input.insertText` via CDP | CI, headless tests, dev iteration |
-| `os`  | `lib/executors/os.js`  | `CGEventPost` via the `browser-input` Swift helper | Production / stealth runs (macOS) |
+| `os`  | `lib/executors/os.js`  | OS-level input via the `browser-input` helper — `CGEventPost` (macOS) / XTEST (Linux X11) | Production / stealth runs (macOS, Linux X11) |
 
 Backends are selected per Run via the `executor` option on `loop.run()` (or via the `BROWSER_AGENT_EXECUTOR` env var). The default is `os`; tests and CI can opt into `cdp` for deterministic synthetic input.
 

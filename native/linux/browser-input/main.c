@@ -27,6 +27,7 @@
 #include <ctype.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/Xutil.h>      // XClassHint, XGetClassHint, XFetchName
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 #include <X11/extensions/scrnsaver.h>
@@ -37,14 +38,28 @@
 
 // Returns a pointer into `json` at the first char of the value for `key`,
 // or NULL if not found. Handles one level of nesting only (flat object).
+//
+// A bare strstr for "key" is not enough: the same quoted token can appear as a
+// *value* earlier in the object (e.g. {"op":"key","key":"a"} — the first "key"
+// is op's value), and matching that would read the wrong field. So we require
+// the match to sit in key position: immediately followed (after whitespace) by
+// a ':'. If it isn't, we keep scanning for the next occurrence.
 static const char *json_find(const char *json, const char *key) {
     char needle[256];
     snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return NULL;
-    p += strlen(needle);
-    while (*p && (*p == ' ' || *p == ':' || *p == '\t')) p++;
-    return *p ? p : NULL;
+    size_t nlen = strlen(needle);
+    const char *p = json;
+    while ((p = strstr(p, needle)) != NULL) {
+        const char *q = p + nlen;
+        while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+        if (*q == ':') {
+            q++;
+            while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+            return *q ? q : NULL;
+        }
+        p += nlen;   // matched a value, not a key — keep searching
+    }
+    return NULL;
 }
 
 // Extract a string value into `out` (max `outlen`). Returns 1 on success.
@@ -262,12 +277,18 @@ static KeySym named_keysym(const char *name) {
     if (!strcmp(name,"pageup"))    return XK_Page_Up;
     if (!strcmp(name,"pagedown"))  return XK_Page_Down;
     // F-keys
-    if (!strcmp(name,"f1"))  return XK_F1;  if (!strcmp(name,"f2"))  return XK_F2;
-    if (!strcmp(name,"f3"))  return XK_F3;  if (!strcmp(name,"f4"))  return XK_F4;
-    if (!strcmp(name,"f5"))  return XK_F5;  if (!strcmp(name,"f6"))  return XK_F6;
-    if (!strcmp(name,"f7"))  return XK_F7;  if (!strcmp(name,"f8"))  return XK_F8;
-    if (!strcmp(name,"f9"))  return XK_F9;  if (!strcmp(name,"f10")) return XK_F10;
-    if (!strcmp(name,"f11")) return XK_F11; if (!strcmp(name,"f12")) return XK_F12;
+    if (!strcmp(name,"f1"))  return XK_F1;
+    if (!strcmp(name,"f2"))  return XK_F2;
+    if (!strcmp(name,"f3"))  return XK_F3;
+    if (!strcmp(name,"f4"))  return XK_F4;
+    if (!strcmp(name,"f5"))  return XK_F5;
+    if (!strcmp(name,"f6"))  return XK_F6;
+    if (!strcmp(name,"f7"))  return XK_F7;
+    if (!strcmp(name,"f8"))  return XK_F8;
+    if (!strcmp(name,"f9"))  return XK_F9;
+    if (!strcmp(name,"f10")) return XK_F10;
+    if (!strcmp(name,"f11")) return XK_F11;
+    if (!strcmp(name,"f12")) return XK_F12;
     // Letters — lowercase names only (executor sends lowercase).
     if (strlen(name) == 1 && name[0] >= 'a' && name[0] <= 'z')
         return XK_a + (name[0] - 'a');
@@ -291,8 +312,9 @@ static KeyCode modifier_keycode(const char *name) {
 }
 
 // Find a spare keycode — one that has no keysym bound — to temporarily
-// remap for Unicode character injection. Scans from 9 downward (low keycodes
-// are rarely used on modern X11 servers; keycodes 8..255 are valid).
+// remap for Unicode character injection. Scans from the server's highest
+// keycode downward and returns the first (i.e. highest) unused one; high
+// keycodes are the least likely to collide with anything the WM or apps grab.
 // Returns 0 if none found (extremely unlikely on any real server).
 static KeyCode find_spare_keycode(void) {
     int min_kc, max_kc;
@@ -564,6 +586,25 @@ static long get_sys_idle_ms(void) {
     return idle;
 }
 
+// ─── X11 error handling ────────────────────────────────────────────────────────
+//
+// Xlib's *default* error handler prints to stderr and then calls exit() on any
+// protocol error — fatal for a long-lived helper. We legitimately poke at
+// windows that may vanish between listing and inspecting them (raise_by_pid
+// walks _NET_CLIENT_LIST, then reads PID/class/name off each entry), so a
+// BadWindow/BadValue is expected churn, not a reason to die. Swallow non-fatal
+// protocol errors (log to stderr for debugging) and keep serving requests.
+// IO errors (the X connection itself dropping) remain fatal — there's nothing
+// left to drive, so we let those propagate.
+static int x_error_handler(Display *d, XErrorEvent *e) {
+    (void)d;
+    char buf[256];
+    XGetErrorText(e->display, e->error_code, buf, sizeof(buf));
+    fprintf(stderr, "[browser-input] non-fatal X error: %s (request %d.%d)\n",
+            buf, e->request_code, e->minor_code);
+    return 0;  // ignored — do not exit
+}
+
 // ─── Op dispatch ─────────────────────────────────────────────────────────────
 
 static void handle(const char *line) {
@@ -691,7 +732,11 @@ static void handle(const char *line) {
 
     // ── type ──────────────────────────────────────────────────────────────────
     if (!strcmp(op, "type")) {
-        char text[4096] = "";
+        // Sized to the input line buffer (main's `line[65536]`) so a long type
+        // value is never silently truncated — the macOS helper types a dynamic
+        // Swift string with no cap, and this keeps the two backends at parity.
+        static char text[65536];
+        text[0] = '\0';
         if (!json_str(line, "text", text, sizeof(text))) {
             write_fail(id, "type requires text"); return;
         }
@@ -830,6 +875,10 @@ int main(void) {
     }
     screen_num = DefaultScreen(dpy);
     root       = RootWindow(dpy, screen_num);
+
+    // Survive transient protocol errors (e.g. inspecting a window that just
+    // closed) instead of letting Xlib's default handler exit() the helper.
+    XSetErrorHandler(x_error_handler);
 
     // Verify XTEST is present (required for all input injection).
     int evt, err, major, minor;
