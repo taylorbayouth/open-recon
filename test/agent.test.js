@@ -401,7 +401,7 @@ async function osGateSuite() {
   console.log('\nos backend (input gate):');
   const { ensureInputSafe, pageToScreen } = require('../lib/executors/os');
 
-  // Minimal fake of the recon-input helper client: send() answers the gate
+  // Minimal fake of the browser-input helper client: send() answers the gate
   // probes. Deliberately NO `Page` domain — the real helper is a JSON-RPC client
   // over the Swift binary, not a CDP client, so ensureInputSafe must never reach
   // for `.Page` (foregrounding lives in pageToScreen, which holds the CDP client).
@@ -460,6 +460,25 @@ async function osGateSuite() {
     const screen = await pageToScreen(session, 100, 100, { viewportRelative: true });
     assert.ok(Number.isFinite(screen.x) && Number.isFinite(screen.y), 'coordinate mapping proceeds despite a failed raise');
   });
+
+  await test('pageToScreen falls back when native viewport origin is unavailable', async () => {
+    const session = screenSession();
+    const inputClient = { send: async () => { throw new Error('old helper'); } };
+    const screen = await pageToScreen(session, 100, 100, { viewportRelative: true, inputClient });
+    assert.deepStrictEqual(screen, { x: 100, y: 200 });
+  });
+
+  if (process.platform === 'darwin') {
+    await test('pageToScreen prefers macOS AXWebArea origin when available', async () => {
+      const session = screenSession();
+      const inputClient = { send: async ({ op }) => {
+        assert.strictEqual(op, 'webarea');
+        return { x: 10, y: 20, width: 1000, height: 800, source: 'macos-ax-webarea' };
+      } };
+      const screen = await pageToScreen(session, 100, 100, { viewportRelative: true, inputClient });
+      assert.deepStrictEqual(screen, { x: 110, y: 120 });
+    });
+  }
 }
 
 async function validateSuite() {

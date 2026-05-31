@@ -240,7 +240,7 @@ export interface HumanizeOptions {
 export interface ExecutorOptions {
   /** Backend selection. Default: env BROWSER_AGENT_EXECUTOR or 'os'. */
   backend?: 'cdp' | 'os';
-  /** Override path to the recon-input binary (os backend, macOS only). */
+  /** Override path to the browser-input binary (os backend, macOS only). */
   binPath?: string;
   /** Pause OS input while the human uses mouse/keyboard. Default: true. */
   pauseOnUserInput?: boolean;

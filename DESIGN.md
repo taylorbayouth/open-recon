@@ -20,7 +20,7 @@ This document captures the architecture, contracts, and conventions for the broa
 ```
 ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
 │ Connect  │──▶│ Extract  │──▶│  Reduce  │──▶│   Plan   │──▶│ Validate │──▶│ Execute  │
-│  (CDP)   │   │ (recon)  │   │ (prompt) │   │  (LLM)   │   │ (refs)   │   │  (CDP)   │
+│  (CDP)   │   │ (input)  │   │ (prompt) │   │  (LLM)   │   │ (refs)   │   │  (CDP)   │
 └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
                     ▲                                                            │
                     └────────── settle() + Observe (re-snapshot) ────────────────┘
@@ -260,7 +260,7 @@ The LLM marks task completion by emitting `{ verb: "done", args: { result: "…"
 | Backend | Module | Mechanism | Use case |
 |---|---|---|---|
 | `cdp` | `lib/executors/cdp.js` | `Input.dispatchMouseEvent` / `Input.insertText` via CDP | CI, headless tests, dev iteration |
-| `os`  | `lib/executors/os.js`  | `CGEventPost` via the `recon-input` Swift helper | Production / stealth runs (macOS) |
+| `os`  | `lib/executors/os.js`  | `CGEventPost` via the `browser-input` Swift helper | Production / stealth runs (macOS) |
 
 Backends are selected per Run via the `executor` option on `loop.run()` (or via the `BROWSER_AGENT_EXECUTOR` env var). The default is `os`; tests and CI can opt into `cdp` for deterministic synthetic input.
 
@@ -287,7 +287,7 @@ OS-level input via `CGEventPost` goes through the same kernel pipeline as a real
 
 ### Coordinate translation (os backend)
 
-The brief's bboxes are in CSS page coordinates relative to the document. CGEvent wants screen coordinates. The translation is:
+The brief's bboxes are in CSS page coordinates relative to the document. CGEvent wants screen coordinates. The fallback translation is:
 
 ```
 screen.x = window.left + chromeOffsetX + (pageX - scrollX)
@@ -299,7 +299,9 @@ screen.y = window.top  + chromeOffsetY + (pageY - scrollY)
 - `chromeOffsetY` — Chrome's title + tab + URL bar height. Computed as `windowBounds.height - cssVisualViewport.clientHeight`.
 - `chromeOffsetX` — usually 0; computed analogously for completeness.
 
-`window`/scroll/offset are all resolved per-dispatch against the session's **current** target (`Browser.getWindowForTarget(targetId)`), so after the session follows a popup or new tab (see below) the math automatically tracks that window. Because CGEvents land on whichever window is topmost at the screen point, coordinate conversion (`pageToScreen`) calls `Page.bringToFront()` on the current target before each dispatch — so a followed popup is raised above any window behind it before the click lands. (The input safety gate `ensureInputSafe` can't do this: it holds only the recon-input helper, which has no CDP `Page` domain.)
+On macOS, `pageToScreen` first asks the native helper for the frontmost Chrome `AXWebArea` frame and uses that top-left as the viewport origin. That avoids inferring toolbar height when Accessibility exposes the real content rect. If the helper is old, AX is unavailable, or Chrome exposes no web area, the CDP-derived formula above remains the fallback.
+
+`window`/scroll/offset are all resolved per-dispatch against the session's **current** target (`Browser.getWindowForTarget(targetId)`), so after the session follows a popup or new tab (see below) the math automatically tracks that window. Because CGEvents land on whichever window is topmost at the screen point, coordinate conversion (`pageToScreen`) calls `Page.bringToFront()` on the current target before each dispatch — so a followed popup is raised above any window behind it before the click lands. (The input safety gate `ensureInputSafe` can't do this: it holds only the browser-input helper, which has no CDP `Page` domain.)
 
 ### Tab following (multi-tab / popups)
 

@@ -16,10 +16,10 @@ const fs = require('fs');
 const path = require('path');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // ../ — this script lives in tools/, the binary in native/ at the repo root.
-const BIN = path.resolve(__dirname, '..', 'native/macos/recon-input/bin/recon-input');
+const BIN = path.resolve(__dirname, '..', 'native/macos/browser-input/bin/browser-input');
 const TEST_BIN = '/tmp/scroll-test';
 
-function reconClient() {
+function browserInputClient() {
   const child = spawn(BIN, [], { stdio: ['pipe', 'pipe', 'inherit'] });
   let buf = '', seq = 0; const pending = new Map();
   child.stdout.setEncoding('utf8');
@@ -39,7 +39,7 @@ async function scrollerTop(client) {
 async function resetScroller(client){ await client.Runtime.evaluate({ expression:`(() => { let b=null; for (const el of document.querySelectorAll('*')){const cs=getComputedStyle(el); if((cs.overflowY==='auto'||cs.overflowY==='scroll')&&el.scrollHeight>el.clientHeight+50&&el.clientHeight>200){if(!b||el.scrollHeight>b.scrollHeight)b=el;}} if(b)b.scrollTop=0; })()` }); }
 
 async function main() {
-  const rc = reconClient();
+  const rc = browserInputClient();
   const ax = await rc.send({ op: 'axtrusted' });
   console.log(`[1] Accessibility trusted for this process: ${ax.trusted}`);
   if (!ax.trusted) { console.log('    -> run this from a Terminal that has Accessibility permission.'); rc.kill(); process.exit(1); }
@@ -71,7 +71,7 @@ async function main() {
 
   // wheel variants
   const haveTest = fs.existsSync(TEST_BIN);
-  const variants = haveTest ? [['pixel',534],['line',15],['pixelphase',534]] : [['pixel(recon-input)',534]];
+  const variants = haveTest ? [['pixel',534],['line',15],['pixelphase',534]] : [['pixel(browser-input)',534]];
   console.log('[4] which wheel variant scrolls the inner scroller?');
   for (const [mode, delta] of variants) {
     await resetScroller(client); await sleep(300);
