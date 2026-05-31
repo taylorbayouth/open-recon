@@ -126,6 +126,12 @@ Large findings go to disk; compact summaries stay in memory.
 
 ## Try It
 
+Prerequisites:
+
+- Node.js 18 or newer
+- Google Chrome or Chromium
+- one provider key, unless you use `--provider ollama`
+
 ```bash
 git clone https://github.com/taylorbayouth/browser-agent.git
 cd browser-agent
@@ -142,10 +148,37 @@ and stars today. Return a compact markdown table."
 
 The first run performs preflight:
 
-- asks for an API key and stores it in `.env`
-- launches regular Chrome with an Browser Agent profile
-- offers the signed macOS input helper for the stealth executor
-- points you to Accessibility permission if macOS needs it
+- creates `.env` from `.env.example` if needed
+- verifies dependencies are installed
+- installs the `browser-input` helper for the default `os` executor
+  - macOS: offers the notarized helper from GitHub Releases, or builds from
+    source with Xcode command-line tools
+  - Linux: builds the X11 helper from source
+- checks OS input permission before the agent starts
+  - macOS: requests Accessibility permission and opens the correct System
+    Settings pane; grant access, then re-run if macOS has not reported it yet
+  - Linux: verifies an X11/Xwayland display is reachable
+- asks for the active provider API key and stores it in `.env`
+- launches regular Chrome with an isolated Browser Agent profile at
+  `~/.browser-agent/profile`
+
+The native helper binary is not committed to git; `native/*/browser-input/bin/`
+is a local build/download output. Published macOS builds belong on this repo's
+GitHub Releases. If the release is missing or stale, choose the build-from-source
+option on macOS:
+
+```bash
+xcode-select --install
+bash native/macos/browser-input/build.sh
+```
+
+If Chrome is installed somewhere unusual, set its executable path explicitly:
+
+```bash
+BROWSER_AGENT_CHROME_PATH="/path/to/Google Chrome" node agent.js "..."
+```
+
+You can also set `chrome.executablePath` in `browser-agent.config.json`.
 
 Want only the extractor?
 

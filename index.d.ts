@@ -209,7 +209,7 @@ export interface ExtractOptions {
 export interface LaunchOptions {
   /** CDP debugging port. Default: 9222 */
   port?: number;
-  /** Explicit path to Chrome/Chromium executable. */
+  /** Explicit path to Chrome/Chromium executable. Defaults to BROWSER_AGENT_CHROME_PATH or auto-discovery. */
   executablePath?: string;
   /** Chrome user data directory. Default: ~/.browser-agent/profile */
   userDataDir?: string;

@@ -24,6 +24,7 @@
 //   { "id": "<corr>", "op": "pos" }                          // returns cursor
 //   { "id": "<corr>", "op": "ping" }
 //   { "id": "<corr>", "op": "axtrusted" }                    // Accessibility check
+//   { "id": "<corr>", "op": "axprompt" }                     // request Accessibility prompt
 //   { "id": "<corr>", "op": "frontapp" }                     // frontmost app id
 //   { "id": "<corr>", "op": "webarea" }                      // frontmost Chrome web area
 //   { "id": "<corr>", "op": "idle" }                         // real-user input idle
@@ -437,6 +438,13 @@ func handle(_ cmd: [String: Any]) {
         // Reports whether this process holds Accessibility permission. Without
         // it, CGEvent posting silently no-ops, so setup probes this up front.
         ok(id, ["trusted": AXIsProcessTrusted()])
+
+    case "axprompt":
+        // Ask macOS to show the Accessibility consent prompt for this process.
+        // The user still has to approve it in System Settings; TCC cannot be
+        // bypassed programmatically.
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        ok(id, ["trusted": AXIsProcessTrustedWithOptions(options)])
 
     case "frontapp":
         // The frontmost (foreground) app. The executor checks this before every

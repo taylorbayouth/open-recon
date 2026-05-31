@@ -3,6 +3,10 @@
   "model": "gpt-5.4-mini",
   "reasoningEffort": "medium",
 
+  "chrome": {
+    "executablePath": null
+  },
+
   "loop": {
     "maxSteps": 100,
     "shortCircuitOnNoChange": true,

@@ -35,6 +35,9 @@
     "type": "git",
     "url": "https://github.com/taylorbayouth/browser-agent.git"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "type": "commonjs",
   "dependencies": {
     "chrome-remote-interface": "^0.34.0",

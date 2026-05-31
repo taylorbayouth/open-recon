@@ -85,6 +85,7 @@ Environment:
   GEMINI_API_KEY          Required for the gemini provider.
   BROWSER_AGENT_PROVIDER     Override config provider (${[...PROVIDERS].join('|')}).
   BROWSER_AGENT_EXECUTOR     Override config executor backend ('os'|'cdp').
+  BROWSER_AGENT_CHROME_PATH  Explicit Chrome/Chromium executable path.
   BROWSER_AGENT_CONTEXT      Trusted background injected into the system prompt.
   OPENAI_PROMPT_CACHE_RETENTION  Optional OpenAI cache retention ('24h' for
                           extended retention on supported models; unset = default).
