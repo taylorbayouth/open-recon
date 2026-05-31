@@ -16,6 +16,16 @@
     "maxSameDirectionScrolls": 3
   },
 
+  "reflect": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-5.5",
+    "maxReflections": 10,
+    "cooldownTurns": 4,
+    "budgetTurnFraction": 0.6,
+    "savedMaxChars": 16000
+  },
+
   "settle": {
     "afterActionMs": 150,
     "maxMs": 2000
