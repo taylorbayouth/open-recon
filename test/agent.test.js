@@ -1636,6 +1636,30 @@ async function reflectSuite() {
     assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['click', 'scroll', 'click', 'done']);
   });
 
+  await test('reflection turn uses its configured model, distinct from the planner', async () => {
+    const reqs = installFakeProvider(
+      [
+        [action('click', { ref: '@e1' })],
+        [action('click', { ref: '@e1' })],
+        [action('click', { ref: '@e1' })],
+        [action('done', { args: { result: 'ok' } })],
+      ],
+      ['Pivot: try a different entry point'],
+    );
+    const session = makeFakeSession([makeBrief]);
+    const cfg = baseConfig({
+      loop: { shortCircuitOnNoChange: true, pollMs: 0, maxNoChangePolls: 1, maxStuckRepeats: 2 },
+      reflect: { enabled: true, model: 'reflect-model-x', budgetTurnFraction: 0.99 },
+    });
+    cfg.model = 'planner-model';   // baseConfig doesn't forward a top-level model override
+    await run({ session, task: 'x', config: cfg });
+    const reflectReq = reqs.find(q => !q.tools || q.tools.length === 0);
+    assert.ok(reflectReq, 'a reflection request was made');
+    assert.strictEqual(reflectReq.model, 'reflect-model-x', 'reflection used its own model');
+    const planReq = reqs.find(q => q.tools && q.tools.length > 0);
+    assert.strictEqual(planReq.model, 'planner-model', 'planning used the planner model');
+  });
+
   await test('clipSaved keeps every heading and tail-trims the body', () => {
     const { clipSaved } = require('../lib/reflect');
     const body = 'x'.repeat(5000);
