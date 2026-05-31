@@ -1144,6 +1144,21 @@ async function loopSuite() {
     assert.strictEqual(r.steps.length, 0);
   });
 
+  await test('loop executes only the first planned action per turn', async () => {
+    const reqs = installFakeProvider([
+      [
+        action('click', { ref: '@e1', args: { intent: 'open result' } }),
+        action('press', { args: { key: 'Enter', intent: 'stale second action' } }),
+      ],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief]);
+    const r = await run({ session, task: 'x', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+    assert.deepStrictEqual(r.steps.map(s => s.action.verb), ['click', 'done']);
+    assert.match(reqs[1].messages[0].content, /pressed Enter — intent: stale second action — rejected: ignored: only one action per turn is allowed/);
+  });
+
   await test('no-op guard aborts when the model repeats a dead action', async () => {
     installFakeProvider([[action('click', { ref: '@e1' })]]);  // same click forever
     const session = makeFakeSession([makeBrief]);              // page never changes ⇒ no-op
@@ -1171,11 +1186,11 @@ async function loopSuite() {
     assert.strictEqual(r.steps.length, 2);
   });
 
-  await test('repeated scroll intent adds a pivot warning to history', async () => {
+  await test('repeated scroll direction adds a pivot warning despite varied intents', async () => {
     const reqs = installFakeProvider([
       [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
-      [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
-      [action('scroll', { args: { direction: 'down', intent: 'inspect more evidence' } })],
+      [action('scroll', { args: { direction: 'down', intent: 'find lower careers link' } })],
+      [action('scroll', { args: { direction: 'down', intent: 'reveal footer links' } })],
       [action('done', { args: {} })],
     ]);
     const session = makeFakeSession([
@@ -1187,10 +1202,10 @@ async function loopSuite() {
     const r = await run({
       session,
       task: 'x',
-      config: baseConfig({ loop: { maxSameIntentScrolls: 3 } }),
+      config: baseConfig({ loop: { maxSameDirectionScrolls: 3 } }),
     });
     assert.strictEqual(r.status, 'completed', r.error);
-    assert.match(reqs[3].messages[0].content, /WARNING: scroll intent repeated 3x/);
+    assert.match(reqs[3].messages[0].content, /WARNING: scroll down repeated 3x on this page/);
     assert.match(reqs[3].messages[0].content, /pivot, save findings, go back, or finish/);
   });
 
@@ -1362,14 +1377,14 @@ async function loopSuite() {
   });
 
   await test('finished run folds saved.md into report.md and removes saved.md', async () => {
-    installFakeProvider([[
-      action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } }),
-      action('done', { args: { result: 'ok' } }),
-    ]]);
+    installFakeProvider([
+      [action('save_text', { args: { content: 'Full captured finding', summary: 'Captured finding' } })],
+      [action('done', { args: { result: 'ok' } })],
+    ]);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-agent-run-'));
     try {
       const r = await run({
-        session: makeFakeSession([makeBrief]),
+        session: makeFakeSession([makeBrief, makeBrief]),
         task: 'finish with saved content',
         config: { ...baseConfig(), scratchpad: { enabled: true, dir } },
       });

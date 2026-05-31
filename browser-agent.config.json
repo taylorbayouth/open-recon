@@ -13,7 +13,7 @@
     "maxSparsePageRetries": 4,
     "sparsePageRetryMs": 400,
     "sparsePageMinNodes": 2,
-    "maxSameIntentScrolls": 3
+    "maxSameDirectionScrolls": 3
   },
 
   "settle": {

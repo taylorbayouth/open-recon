@@ -356,7 +356,7 @@ DEFAULTS (lib/config.js)  <  browser-agent.config.json  <  env vars  <  CLI flag
 | `loop.maxSparsePageRetries` | `4` | After URL change, retry sparse snapshots this many times before prompting. |
 | `loop.sparsePageRetryMs` | `400` | Wait between sparse post-navigation re-extracts. |
 | `loop.sparsePageMinNodes` | `2` | Elements + text + regions below this count is considered sparse. |
-| `loop.maxSameIntentScrolls` | `3` | Add a pivot warning after this many consecutive same-intent scrolls on one page. |
+| `loop.maxSameDirectionScrolls` | `3` | Add a pivot warning after this many consecutive same-direction scrolls on one page. |
 | `settle.afterActionMs` | `150` | Pause after an action before the next snapshot. |
 | `settle.maxMs` | `2000` | Hard cap on settle. |
 | `executor.backend` | `os` | `os` or `cdp` (also `BROWSER_AGENT_EXECUTOR`). |
@@ -400,7 +400,7 @@ The LLM verb `wait` is *not* the settle mechanism — it's for deliberate pauses
 
 After a URL-changing action, Loop also retries sparse snapshots before prompting (`loop.maxSparsePageRetries`, `loop.sparsePageRetryMs`, `loop.sparsePageMinNodes`). This catches pages that have committed navigation but not yet hydrated enough DOM/accessibility content, avoiding premature screenshot fallbacks on temporarily empty pages.
 
-Loop tracks consecutive scrolls with the same `intent` on the same page. Once `loop.maxSameIntentScrolls` is reached, it adds a warning to prompt history telling the model to pivot, save findings, go back, or finish. This is advisory, not a hard rejection.
+Loop tracks consecutive scrolls with the same direction on the same page. Once `loop.maxSameDirectionScrolls` is reached, it adds a warning to prompt history telling the model to pivot, save findings, go back, or finish. This is advisory, not a hard rejection. The legacy `loop.maxSameIntentScrolls` key is still accepted as a fallback.
 
 ---
 
