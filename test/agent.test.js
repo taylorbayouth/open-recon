@@ -23,7 +23,7 @@ const shared = require('../lib/providers/_shared');
 const { normalizeUrl, back, clickablePoint, bestQuadRect } = require('../lib/executors/page');
 const { createScratchpad, filenameStemFromHint } = require('../lib/scratchpad');
 const { buildSystemPrompt } = require('../lib/prompt');
-const { collectRegions, buildSnapshotMaps } = require('../lib/extract');
+const { collectRegions, collectPasswordIds, buildSnapshotMaps } = require('../lib/extract');
 
 // ─── tiny sequential runner ──────────────────────────────────────────────────
 // Sequential matters: the loop tests share the injected fake provider, so they
@@ -237,6 +237,81 @@ async function reduceSuite() {
     const moved = makeBrief({ regions: [{ role: 'canvas', bbox: [500, 500, 10, 10], inViewport: true }] });
     assert.strictEqual(computeBriefHash(withCanvas), computeBriefHash(moved), 'region bbox excluded from hash');
   });
+
+  await test('collapses internal whitespace so a multi-line name stays on one line', () => {
+    const brief = makeBrief({
+      // a wrapped button label / alt text with hard line breaks and tabs
+      elements: [{ ref: '@e1', role: 'button', name: 'Add\n   to\t cart', bbox: [10, 10, 80, 30] }],
+      text: [{ ref: '@t1', role: 'paragraph', name: 'line one\nline two', bbox: [10, 60, 200, 40] }],
+      lookup: { '@e1': 1, '@t1': 2 },
+    });
+    const listing = reduce(brief, { includeText: true }).listing;
+    assert.strictEqual(listing.split('\n').length, 2, 'two nodes ⇒ exactly two lines (no embedded newline)');
+    assert.ok(listing.includes('"Add to cart"'), 'whitespace runs collapse to single spaces');
+    assert.ok(listing.includes('"line one line two"'), 'text node names collapse too');
+  });
+
+  await test('truncates an over-long interactive name (stretched-link cards)', () => {
+    const long = 'x'.repeat(500);
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'link', name: long, bbox: [10, 10, 80, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    const line = reduce(brief, { includeText: false, maxTextChars: 200 }).listing;
+    assert.ok(line.includes('…'), 'long name is ellipsized');
+    assert.ok(line.length < long.length, 'rendered line is shorter than the raw name');
+  });
+
+  await test('surfaces required and invalid form-field states', () => {
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'textbox', name: 'Email', required: true, invalid: true, bbox: [10, 10, 200, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    const listing = reduce(brief, { includeText: false }).listing;
+    assert.match(listing, /\(required\)/, 'required marker present');
+    assert.match(listing, /\(invalid\)/, 'invalid marker present');
+  });
+
+  await test('does not flag the AX "false" invalid token (full-mode raw value)', () => {
+    // full-mode briefs carry the raw AX token; "false" is a truthy string and
+    // must NOT render as (invalid).
+    const brief = makeBrief({
+      elements: [{ ref: '@e1', role: 'textbox', name: 'Email', invalid: 'false', bbox: [10, 10, 200, 30] }],
+      text: [], lookup: { '@e1': 1 },
+    });
+    assert.ok(!reduce(brief, { includeText: false }).listing.includes('(invalid)'), '"false" token is not invalid');
+  });
+
+  await test('marks a popup-opening control, and an element below the fold with ↓', () => {
+    const brief = makeBrief({
+      elements: [
+        { ref: '@e1', role: 'button', name: 'Account', haspopup: 'menu', bbox: [10, 10, 80, 30], inViewport: true },
+        { ref: '@e2', role: 'button', name: 'Load more', bbox: [10, 1500, 80, 30], inViewport: false },
+      ],
+      text: [], lookup: { '@e1': 1, '@e2': 2 },
+    });
+    const lines = reduce(brief, { includeText: false }).listing.split('\n');
+    const account = lines.find(l => l.includes('@e1'));
+    const loadMore = lines.find(l => l.includes('@e2'));
+    assert.match(account, /\(opens menu\)/, 'haspopup token rendered in plain language');
+    assert.ok(!account.endsWith('↓'), 'on-screen element gets no fold marker');
+    assert.ok(loadMore.endsWith('↓'), 'below-fold element marked with ↓');
+  });
+
+  await test('haspopup: "listbox" reads as "opens list", "dialog" as "opens dialog", "false" shows nothing', () => {
+    const brief = makeBrief({
+      elements: [
+        { ref: '@e1', role: 'combobox', name: 'State', haspopup: 'listbox', bbox: [10, 10, 80, 30] },
+        { ref: '@e2', role: 'button', name: 'Settings', haspopup: 'dialog', bbox: [10, 50, 80, 30] },
+        { ref: '@e3', role: 'button', name: 'Plain', haspopup: 'false', bbox: [10, 90, 80, 30] },
+      ],
+      text: [], lookup: { '@e1': 1, '@e2': 2, '@e3': 3 },
+    });
+    const listing = reduce(brief, { includeText: false }).listing;
+    assert.match(listing, /\(opens list\)/);
+    assert.match(listing, /\(opens dialog\)/);
+    assert.ok(!/Plain.*opens/.test(listing), '"false" haspopup opens nothing');
+  });
 }
 
 // Build a one-document DOMSnapshot from a compact node spec. Each node is
@@ -314,6 +389,18 @@ async function regionSuite() {
     const maps = buildSnapshotMaps(snapshot);
     assert.strictEqual(collectRegions(snapshot, maps, viewport, {}).length, 1, 'off-screen still listed without the filter');
     assert.strictEqual(collectRegions(snapshot, maps, viewport, { inViewportOnly: true }).length, 0, 'inViewportOnly drops it');
+  });
+
+  await test('collectPasswordIds: finds <input type=password>, ignores other inputs/tags', () => {
+    const snapshot = makeSnapshot([
+      { tag: 'INPUT', parent: -1, backend: 1, attrs: { type: 'password' } },  // ✓ password
+      { tag: 'INPUT', parent: -1, backend: 2, attrs: { type: 'text' } },      // ✗ text input
+      { tag: 'INPUT', parent: -1, backend: 3 },                               // ✗ no type
+      { tag: 'DIV',   parent: -1, backend: 4, attrs: { type: 'password' } },  // ✗ not an input
+    ]);
+    const ids = collectPasswordIds(snapshot);
+    assert.ok(ids.has(1), 'password input is collected');
+    assert.ok(!ids.has(2) && !ids.has(3) && !ids.has(4), 'everything else is excluded');
   });
 }
 
