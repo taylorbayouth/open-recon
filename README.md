@@ -226,9 +226,6 @@ Guardrails today:
 - navigation and file saving reject privileged URL schemes
 - perception, screenshots, image/file discovery, and resource reads do not rely
   on page JavaScript
-- optional `collapseNewTabs` uses one small page patch to keep
-  `target="_blank"` links in the current tab; disable it in config for stricter
-  no-patch runs
 - OS executor only sends input when Chrome is frontmost
 - OS executor pauses while the human is actively using the machine
 - `runs/` and `logs/` are local and git-ignored
