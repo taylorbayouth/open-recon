@@ -1004,6 +1004,7 @@ async function promptSuite() {
       type: registry.type,
       wait: registry.wait,
       take_screenshot: registry.take_screenshot,
+      save_text: registry.save_text,
       done: registry.done,
     });
     assert.ok(prompt.includes('click[@e|@t]'), 'click ref types should be shown');
@@ -1012,6 +1013,9 @@ async function promptSuite() {
     assert.ok(prompt.includes('take_screenshot[@e|@t|@r] (ref: string?, intent: string?, hint: string?)'), 'optional ref types should be shown');
     assert.ok(prompt.includes('done (intent: string?, result: string?)'), 'optional args should be marked');
     assert.ok(prompt.includes('describing where this'), 'intent rule should be explicit');
+    assert.ok(prompt.includes('never pass punctuation, CSS selectors, words, or coordinates as ref'), 'screenshot refs should be hardened');
+    assert.ok(prompt.includes('Do not save intermediate report drafts'), 'operating rules should discourage draft-saving');
+    assert.ok(prompt.includes('Do not use save_text for intermediate answer drafts'), 'save_text should discourage drafts');
   });
 
   await test('context is omitted (no header) when null/empty', () => {
@@ -1521,6 +1525,70 @@ async function memorySuite() {
     assert.ok(!reqs[1].messages.some(m => m.role === 'assistant'), 'no transcript replay');
     assert.match(reqs[1].messages[0].content, /typed "hello" into "Search"/);
     assert.match(reqs[1].messages[0].content, /intent: test search input/);
+  });
+
+  await test('prompt carries full intent history without truncating older intents', async () => {
+    const longIntent = 'collect the current result title, preserve the exact wording, then move to the next candidate only after the page responds';
+    const secondIntent = 'open the next candidate from the visible result list';
+    const reqs = installFakeProvider([
+      [action('click', { ref: '@e1', args: { intent: longIntent } })],
+      [action('scroll', { args: { direction: 'down', intent: secondIntent } })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([makeBrief, makeBrief, makeBrief]);
+    const r = await run({ session, task: 'collect candidates', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+
+    const t3 = reqs[2].messages[0].content;
+    assert.match(t3, /1\. clicked "Search" — intent: collect the current result title, preserve the exact wording, then move to the next candidate only after the page responds/);
+    assert.match(t3, /2\. scrolled down — intent: open the next candidate from the visible result list/);
+    assert.ok(!t3.includes('after the page...'), 'intent should not be word-truncated');
+  });
+
+  await test('history uses cleaned navigate URLs and readable select_text targets', async () => {
+    const noisyUrl = 'https://example.test/results?q=browser+agent&utm_source=newsletter&fbclid=abc#section';
+    const reqs = installFakeProvider([
+      [action('click', { ref: '@e1', args: { intent: 'open noisy result URL' } })],
+      [action('select_text', { ref: '@t1', args: { intent: 'read heading' } })],
+      [action('done', { args: {} })],
+    ]);
+    const session = makeFakeSession([
+      makeBrief(),
+      makeBrief({ url: noisyUrl }),
+      makeBrief({ url: noisyUrl }),
+    ]);
+    const r = await run({ session, task: 'inspect result', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+
+    const t3 = reqs[2].messages[0].content;
+    assert.match(t3, /1\. clicked "Search" — intent: open noisy result URL/);
+    assert.match(t3, /page navigated to https:\/\/example\.test\/results\?q=browser\+agent/);
+    assert.match(t3, /selected "Welcome" — intent: read heading — selected: "Welcome"/);
+    assert.ok(!t3.includes('utm_source'), 'history should drop tracking params');
+    assert.ok(!t3.includes('fbclid'), 'history should drop click ids');
+    assert.ok(!t3.includes('#section'), 'history should drop fragments');
+  });
+
+  await test('save_text history includes a bounded content preview', async () => {
+    const important = 'repo one: alpha stars 10; repo two: beta stars 20';
+    const longTail = ' x'.repeat(800);
+    const reqs = installFakeProvider([
+      [action('save_text', {
+        args: {
+          intent: 'store repo facts',
+          content: important + longTail,
+          summary: 'Captured repo facts',
+        },
+      })],
+      [action('done', { args: {} })],
+    ]);
+    const r = await run({ session: makeFakeSession([makeBrief, makeBrief]), task: 'remember facts', config: baseConfig() });
+    assert.strictEqual(r.status, 'completed', r.error);
+
+    const t2 = reqs[1].messages[0].content;
+    assert.match(t2, /saved text — intent: store repo facts — "Captured repo facts" — saved: "repo one: alpha stars 10; repo two: beta stars 20/);
+    assert.ok(t2.includes('…'), 'long saved content should be bounded');
+    assert.ok(t2.length < 5000, 'preview should not dump the full saved note');
   });
 
   await test('turn log includes the simplified LLM payload', async () => {
