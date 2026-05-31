@@ -331,6 +331,10 @@ func postScrollGesture(dx: Int32, dy: Int32, durationMs: Double, jitterPx: Doubl
         usleep(useconds_t(frameMs * 1000))
     }
 
+    // Zero-delta flush: guarantees Chrome's fling-velocity sample window ends at
+    // zero regardless of ease-in-out shape, preventing kinetic scroll after Ended.
+    make(2, 0, 0)?.post(tap: .cghidEventTap)
+    usleep(useconds_t(frameMs * 1000))
     make(4, 0, 0)?.post(tap: .cghidEventTap)
 }
 
